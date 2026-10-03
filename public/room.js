@@ -250,7 +250,9 @@ function devicePanel(d) {
 
   if (!isMe && myId()) {
     out.push(h3('Interact'));
-    out.push(el('div', { className: 'row' }, btn('👉 Poke', () => socket.emit('poke', { to: d.id })), ...state.reactions.map((e) => btn(e, () => socket.emit('react', { to: d.id, emoji: e }), 'emoji'))));
+    out.push(el('div', { className: 'row' }, btn('👉 Poke', () => socket.emit('poke', { to: d.id })),
+      ...(d.caps?.includes('ring') ? [btn('🔔 Ring', () => socket.emit('ring', { to: d.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`)))] : []),
+      ...state.reactions.map((e) => btn(e, () => socket.emit('react', { to: d.id, emoji: e }), 'emoji'))));
     const link = el('input', { placeholder: 'Paste a YouTube / Instagram / any link', type: 'url' });
     link.dataset.keep = '1';
     const send = btn('Send', () => socket.emit('share', { to: d.id, url: link.value.trim() }, (r) => {
@@ -264,6 +266,10 @@ function devicePanel(d) {
     if (extra.length) out.push(el('div', { className: 'row', style: 'margin-top:6px' }, ...extra));
     if (!d.visitors) out.push(el('p', { className: 'note', textContent: 'Links pop up on their screen only after they join from the Invite QR.' }));
   }
+
+  // Wake only makes sense for devices that aren't awake; offline ones can be woken via the MCP tools.
+  const caps = (d.caps ?? []).filter((c) => c !== 'wake' || d.status !== 'here');
+  if (state.host && (caps.includes('cast') || caps.includes('dlna') || caps.includes('wake'))) out.push(...controlSection(d, caps));
 
   if (state.host) {
     out.push(h3('Manage'));
@@ -289,6 +295,49 @@ function devicePanel(d) {
   if (state.host) out.push(h3('Details'), dl([['IP', d.ip], ['MAC', d.mac], ['Maker', d.randomMac ? 'hidden (private address)' : d.vendor], ['Bonjour', d.bonjourName], ['Zone', d.zone], ['First seen', ago(d.firstSeen)], ['Last seen', ago(d.lastSeen)], ...(bleOf(d) ? [['Distance', `${fmtM(bleOf(d).meters)} (Bluetooth)`]] : [])]));
   if (d.randomMac) out.push(el('p', { className: 'note', textContent: 'Uses a randomized Wi-Fi address (common on phones). Nickname it, or ask them to join from the Invite QR.' }));
   return out;
+}
+
+// Buttons for whatever the device's drivers support (Cast, DLNA, Wake-on-LAN).
+function controlSection(d, caps) {
+  const act = (action, args) => socket.emit('action', { id: d.id, action, args }, (r) => toast(r.ok ? `🎛️ ${r.message}` : `⚠️ ${r.error}`));
+  const out = [h3(`Control${caps.includes('cast') ? ' · Cast' : ''}${caps.includes('dlna') ? ' · DLNA' : ''}`)];
+  if (caps.includes('cast') || caps.includes('dlna')) {
+    const url = el('input', { type: 'url', placeholder: caps.includes('cast') ? 'YouTube link or video/music URL' : 'Direct video or music URL' });
+    url.dataset.keep = '1';
+    out.push(el('div', { className: 'row' }, url, btn('▶ Play', () => url.value.trim() && act('play', { url: url.value.trim() }))));
+    const vol = el('input', { type: 'range', min: 0, max: 100, value: 30, style: 'margin-top:6px' });
+    vol.onchange = () => act('volume', { level: Number(vol.value) });
+    out.push(el('div', { className: 'row', style: 'margin-top:6px' },
+      ...(caps.includes('dlna') ? [btn('⏸', () => act('pause'), 'ghost'), btn('▶', () => act('resume'), 'ghost')] : []),
+      btn('⏹ Stop', () => act('stop'), 'ghost')), vol);
+  }
+  if (caps.includes('wake')) out.push(el('div', { className: 'row', style: 'margin-top:6px' }, btn('⚡ Wake', () => act('wake'), 'ghost'), el('span', { className: 'note', textContent: 'Turns it on if "wake on LAN / via Wi-Fi" is enabled on the device.' })));
+  return out;
+}
+
+// "Find my phone": loud beeps, vibration and a flashing screen until someone taps it.
+let ringing = null;
+function startRing(from) {
+  stopRing();
+  const overlay = el('div', { id: 'ring' }, el('div', { textContent: '🔔' }), el('p', { textContent: `${from} is looking for this phone` }), el('p', { className: 'note', textContent: 'Tap anywhere to stop' }));
+  document.body.append(overlay);
+  const ctx = window.__audio ?? new AudioContext();
+  ctx.resume?.();
+  const beep = () => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'square'; o.frequency.value = 1320; g.gain.value = 0.4;
+    o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.25);
+    navigator.vibrate?.([300, 150, 300]);
+  };
+  beep();
+  const timer = setInterval(beep, 700);
+  ringing = { overlay, timer, end: setTimeout(stopRing, 30_000) };
+  overlay.onclick = stopRing;
+}
+function stopRing() {
+  if (!ringing) return;
+  clearInterval(ringing.timer); clearTimeout(ringing.end); ringing.overlay.remove(); navigator.vibrate?.(0);
+  ringing = null;
 }
 
 function blePanel(b) {
@@ -335,6 +384,7 @@ socket.on('connect_error', (err) => {
 
 $('join-form').onsubmit = (e) => {
   e.preventDefault();
+  window.__audio ??= new AudioContext(); // phones only allow sound after a tap; this tap unlocks "ring"
   const code = $('join-code').value.trim();
   if ($('join-code').style.display !== 'none' && code) { socket.auth.code = code; socket.connect(); }
   socket.emit('join', { name: $('join-name').value });
@@ -361,6 +411,7 @@ socket.on('poked', ({ to, alive, ms }) => {
   floatText(s.x, s.y - T * 0.95, alive ? `${ms > 150 ? '😓' : '⚡'} ${ms} ms` : '😴 no reply', { bg: alive ? '#bff3d3' : '#ddd', hold: 1800 });
 });
 socket.on('poked-you', ({ from }) => { toast(`👉 ${from} poked you!`); navigator.vibrate?.(200); });
+socket.on('ring', ({ from }) => startRing(from));
 
 socket.on('card', ({ from, url }) => {
   const u = new URL(url);

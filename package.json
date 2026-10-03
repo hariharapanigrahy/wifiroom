@@ -1,6 +1,6 @@
 {
   "name": "wifiroom",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "See who is on your Wi-Fi, as characters in a tiny pixel room. 100% local and passive.",
   "type": "module",
   "bin": {
@@ -10,7 +10,9 @@
     "bin",
     "public",
     "server.js",
-    "ble.js"
+    "ble.js",
+    "drivers.js",
+    "mcp.js"
   ],
   "scripts": {
     "start": "node bin/wifiroom.js"
@@ -33,16 +35,24 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@network-utils/arp-lookup": "^2.1.0",
     "@network-utils/vendor-lookup": "^1.0.14",
     "bonjour-service": "^1.4.4",
+    "castv2-client": "^1.2.0",
     "express": "^5.2.1",
     "lowdb": "^7.0.1",
+    "node-ssdp": "^4.0.1",
     "open": "^11.0.4",
     "phaser": "^4.2.1",
     "ping": "^1.0.0",
     "qrcode": "^1.5.4",
-    "socket.io": "^4.8.4"
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
+    "upnp-mediarenderer-client": "^1.4.0",
+    "wake_on_lan": "^1.0.0",
+    "youtube-remote": "^1.1.0",
+    "zod": "^4.6.5"
   },
   "optionalDependencies": {
     "@stoprocent/noble": "^2.8.0"

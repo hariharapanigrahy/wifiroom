@@ -1,0 +1,141 @@
+// Device control glue. Each driver wraps an existing package and attaches capabilities to
+// devices by IP address once it sees them announce a protocol on the network.
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { Client: CastClient, DefaultMediaReceiver } = require('castv2-client');
+const { Client: SsdpClient } = require('node-ssdp');
+const MediaRendererClient = require('upnp-mediarenderer-client');
+const wol = require('wake_on_lan');
+const YoutubeRemote = require('youtube-remote');
+
+const casts = new Map();  // ip -> { name, port }
+const dlnas = new Map();  // ip -> { location, name }
+
+const youtubeId = (url) => {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1);
+    if (u.hostname.endsWith('youtube.com')) return u.searchParams.get('v') || u.pathname.split('/').filter(Boolean).pop();
+  } catch {}
+  return null;
+};
+
+const guessType = (url) => (/\.(mp3|m4a|aac|flac|wav|ogg)(\?|$)/i.test(url) ? 'audio/mpeg' : /\.(jpe?g|png|gif|webp)(\?|$)/i.test(url) ? 'image/jpeg' : 'video/mp4');
+
+// ---- Google Cast (Chromecast, Google TV, Android TV, Nest speakers) ----
+function withCast(ip, fn) {
+  return new Promise((resolve, reject) => {
+    const client = new CastClient();
+    const done = (err, val) => { client.close(); err ? reject(err) : resolve(val); };
+    client.on('error', (err) => done(err));
+    client.connect({ host: ip, port: casts.get(ip)?.port ?? 8009 }, () => fn(client, done));
+  });
+}
+
+const cast = {
+  async play(ip, url) {
+    const vid = youtubeId(url);
+    if (vid) return castYoutube(ip, vid);
+    return withCast(ip, (client, done) => client.launch(DefaultMediaReceiver, (err, player) => {
+      if (err) return done(err);
+      player.load({ contentId: url, contentType: guessType(url), streamType: 'BUFFERED' }, { autoplay: true }, (e) => done(e, 'Playing'));
+    }));
+  },
+  setVolume: (ip, level) => withCast(ip, (client, done) => client.setVolume({ level: Math.max(0, Math.min(1, level / 100)) }, (e) => done(e, `Volume ${level}%`))),
+  stop: (ip) => withCast(ip, (client, done) => client.getSessions((err, sessions) => {
+    if (err || !sessions?.length) return done(err, 'Nothing playing');
+    client.stop(sessions[0], (e) => done(e, 'Stopped'));
+  })),
+};
+
+// YouTube on Cast devices: DIAL gives the TV's YouTube screen id, youtube-remote plays the video.
+// This uses YouTube's unofficial remote interface and may break if YouTube changes it.
+async function castYoutube(ip, videoId) {
+  await fetch(`http://${ip}:8008/apps/YouTube`, { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
+  let screenId;
+  for (let i = 0; i < 8 && !screenId; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const xml = await fetch(`http://${ip}:8008/apps/YouTube`, { signal: AbortSignal.timeout(4000) }).then((r) => r.text()).catch(() => '');
+    screenId = xml.match(/<screenId>([^<]+)<\/screenId>/)?.[1];
+  }
+  if (!screenId) throw new Error('The TV did not open YouTube');
+  await new Promise((resolve, reject) => new YoutubeRemote(screenId).playVideo(videoId, (err) => (err ? reject(err) : resolve())));
+  return 'Playing on YouTube';
+}
+
+// ---- DLNA / UPnP media renderers (most smart TVs and many speakers) ----
+const dlnaClient = (ip) => new MediaRendererClient(dlnas.get(ip).location);
+const dlnaCall = (ip, method, ...args) => new Promise((resolve, reject) => dlnaClient(ip)[method](...args, (err, res) => (err ? reject(err) : resolve(res))));
+
+const dlna = {
+  async play(ip, url) {
+    if (youtubeId(url)) throw new Error('DLNA can\'t play YouTube links; use a direct video or music link');
+    await dlnaCall(ip, 'load', url, { autoplay: true, contentType: guessType(url) });
+    return 'Playing';
+  },
+  setVolume: async (ip, level) => { await dlnaCall(ip, 'setVolume', Math.round(level)); return `Volume ${level}%`; },
+  pause: async (ip) => { await dlnaCall(ip, 'pause'); return 'Paused'; },
+  resume: async (ip) => { await dlnaCall(ip, 'play'); return 'Playing'; },
+  stop: async (ip) => { await dlnaCall(ip, 'stop'); return 'Stopped'; },
+};
+
+// ---- discovery ----
+export function startDrivers({ bonjour, onChange }) {
+  bonjour.find({ type: 'googlecast' }, (svc) => {
+    const ip = (svc.addresses ?? []).find((a) => a.includes('.'));
+    if (!ip) return;
+    casts.set(ip, { name: svc.txt?.fn || svc.name, port: svc.port });
+    onChange();
+  });
+
+  const ssdp = new SsdpClient();
+  ssdp.on('response', (headers, _code, rinfo) => {
+    if (!dlnas.has(rinfo.address)) {
+      dlnas.set(rinfo.address, { location: headers.LOCATION });
+      onChange();
+    }
+  });
+  const search = () => ssdp.search('urn:schemas-upnp-org:device:MediaRenderer:1');
+  search();
+  setInterval(search, 60_000);
+}
+
+// What a device at this IP can do. `mac` enables Wake-on-LAN for devices with a real hardware address.
+export function capabilitiesOf(ip, { mac, randomMac } = {}) {
+  const caps = [];
+  if (casts.has(ip)) caps.push('cast');
+  if (dlnas.has(ip)) caps.push('dlna');
+  if (mac && !randomMac && !mac.startsWith('02:00:00')) caps.push('wake');
+  return caps;
+}
+
+export const castName = (ip) => casts.get(ip)?.name ?? null;
+
+// Run an action on a device. Prefers Cast, then DLNA.
+export async function runAction({ ip, mac }, action, args = {}) {
+  const viaCast = casts.has(ip), viaDlna = dlnas.has(ip);
+  const pick = (name) => (viaCast && cast[name] ? cast : viaDlna && dlna[name] ? dlna : null);
+  switch (action) {
+    case 'play': {
+      if (viaCast) return cast.play(ip, args.url);
+      if (viaDlna) return dlna.play(ip, args.url);
+      break;
+    }
+    case 'volume': {
+      const d = pick('setVolume');
+      if (d) return d.setVolume(ip, Number(args.level));
+      break;
+    }
+    case 'pause': case 'resume': case 'stop': {
+      const d = pick(action);
+      if (d) return d[action](ip);
+      break;
+    }
+    case 'wake': {
+      if (!mac) break;
+      await new Promise((resolve, reject) => wol.wake(mac, (err) => (err ? reject(err) : resolve())));
+      return 'Wake signal sent';
+    }
+  }
+  throw new Error(`This device doesn't support "${action}"`);
+}

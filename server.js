@@ -15,6 +15,7 @@ import { toVendor, isRandomMac } from '@network-utils/vendor-lookup';
 import ping from 'ping';
 import QRCode from 'qrcode';
 import { JSONFilePreset } from 'lowdb/node';
+import { startDrivers, capabilitiesOf, castName, runAction } from './drivers.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -56,6 +57,8 @@ for (const type of ['airplay', 'raop', 'googlecast', 'companion-link', 'hap', 'i
   });
 }
 
+startDrivers({ bonjour, onChange: () => broadcast() });
+
 const isNoise = (r) => r.ip.endsWith('.255') || /^(22[4-9]|23\d|169\.254)\./.test(r.ip) || /^(ff:){5}ff$|^(0:){5}0$/i.test(r.mac);
 const normMac = (mac) => mac.toLowerCase().split(':').map((b) => b.padStart(2, '0')).join(':');
 const v4 = (addr) => addr?.replace(/^::ffff:/, '');
@@ -83,10 +86,10 @@ function logEvent(type, d) {
 // The host sees everything; visitors get only what the room needs to draw (no IPs, MACs, Bluetooth).
 function snapshot(forHost) {
   return [...devices.values()].map((d) => {
-    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id) };
+    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
     if (forHost) return full;
     const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors } = full;
-    return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors };
+    return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, caps: visitors ? ['ring'] : [] };
   });
 }
 const broadcast = () => {
@@ -104,8 +107,10 @@ function upsert(row, now) {
     lastSeen: now,
     vendor: d.isSelf ? os.hostname() : toVendor(mac),
     randomMac: isRandomMac(mac),
-    bonjourName: bonjourNames.get(row.ip) ?? null,
+    bonjourName: bonjourNames.get(row.ip) ?? castName(row.ip),
   });
+  // Remember real hardware addresses so devices can be woken after they go offline.
+  if (!d.randomMac && !d.isSelf) Object.assign(label(id), { mac, lastIp: row.ip, lastName: d.bonjourName || d.vendor });
   if (isNew) {
     d.pos = randPos(zoneOf(d));
     devices.set(id, d);
@@ -122,6 +127,7 @@ async function refresh() {
   for (const r of rows) r.isSelf = r.ip === me;
   if (me && !rows.some((r) => r.isSelf)) rows.push({ ip: me, mac: '02:00:00:00:00:00', isSelf: true });
   for (const r of rows) upsert(r, now);
+  db.write();
 
   for (const d of devices.values()) {
     if (visitorsOf(d.id)) d.lastSeen = now; // an open browser tab proves it's here
@@ -271,6 +277,32 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('timeline', (ack) => host && ack?.(db.data.events.slice(-100).reverse()));
+
+  // Device control (host only): play a link, volume, pause/resume/stop, wake. Offline devices can be woken by id.
+  socket.on('action', async ({ id, action, args } = {}, ack) => {
+    if (!host || !allow('action', 500)) return ack?.({ ok: false, error: 'Not allowed' });
+    const d = devices.get(id) ?? (db.data.labels[id]?.mac ? { id, ip: db.data.labels[id].lastIp, mac: db.data.labels[id].mac } : null);
+    if (!d) return ack?.({ ok: false, error: 'Unknown device' });
+    try {
+      const message = await runAction(d, action, args);
+      if (devices.has(id)) io.emit('bubble', { id, text: `🎛️ ${message}` });
+      ack?.({ ok: true, message });
+    } catch (err) {
+      ack?.({ ok: false, error: err.message });
+    }
+  });
+
+  // Devices seen before with a real hardware address, including ones that are offline now (for wake).
+  socket.on('known', (ack) => host && ack?.(Object.entries(db.data.labels).filter(([, l]) => l.mac).map(([id, l]) => ({ id, name: l.nickname || l.lastName, mac: l.mac, online: devices.has(id) }))));
+
+  // Ring a phone that has the room open: loud sound, vibration and a flashing screen.
+  socket.on('ring', ({ to } = {}, ack) => {
+    const d = actor(), target = devices.get(to);
+    if (!d || !target || !allow('ring', 5000)) return ack?.({ ok: false, error: "Can't ring right now" });
+    const delivered = visitorsOf(to) > 0;
+    io.to(`dev:${to}`).emit('ring', { from: nameOf(d) });
+    ack?.({ ok: delivered, error: delivered ? undefined : "That device hasn't joined the room" });
+  });
 });
 
 server.on('error', (err) => {
