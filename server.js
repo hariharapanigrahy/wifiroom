@@ -3,6 +3,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
 import { fork } from 'node:child_process';
 import { randomInt, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -304,6 +305,18 @@ io.on('connection', async (socket) => {
     ack?.({ ok: delivered, error: delivered ? undefined : "That device hasn't joined the room" });
   });
 });
+
+// macOS lets a "this laptop only" server and a "whole network" server share a port, which splits
+// the room in two. Refuse to start if anything already answers on this port locally.
+const busy = await new Promise((resolve) => {
+  const probe = net.connect({ host: '127.0.0.1', port: PORT }, () => { probe.destroy(); resolve(true); });
+  probe.on('error', () => resolve(false));
+  probe.setTimeout(800, () => { probe.destroy(); resolve(false); });
+});
+if (busy) {
+  console.error(`WiFiRoom (or something else) is already running on port ${PORT}. Stop it first, or use --port ${PORT + 1}.`);
+  process.exit(1);
+}
 
 server.on('error', (err) => {
   console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is busy. Try: npx wifiroom --port ${PORT + 1}` : err.message);
