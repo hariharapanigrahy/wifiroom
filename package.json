@@ -46,5 +46,13 @@
   },
   "optionalDependencies": {
     "@stoprocent/noble": "^2.8.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hariharapanigrahy/wifiroom.git"
+  },
+  "homepage": "https://github.com/hariharapanigrahy/wifiroom#readme",
+  "bugs": {
+    "url": "https://github.com/hariharapanigrahy/wifiroom/issues"
   }
 }
