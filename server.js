@@ -79,11 +79,35 @@ const isNoise = (r) => r.ip.endsWith('.255') || /^(22[4-9]|23\d|169\.254)\./.tes
 const normMac = (mac) => mac.toLowerCase().split(':').map((b) => b.padStart(2, '0')).join(':');
 const v4 = (addr) => addr?.replace(/^::ffff:/, '');
 
+// On Android, mobile data (rmnet...) can be listed before Wi-Fi or the hotspot, so those come first.
+const ANDROID = process.platform === 'android';
 function selfIp() {
-  for (const addrs of Object.values(os.networkInterfaces())) {
+  const entries = Object.entries(os.networkInterfaces());
+  if (ANDROID) entries.sort(([a], [b]) => /^(wlan|swlan|ap|softap|eth)/.test(b) - /^(wlan|swlan|ap|softap|eth)/.test(a));
+  for (const [, addrs] of entries) {
     const a = addrs.find((x) => x.family === 'IPv4' && !x.internal);
     if (a) return a.address;
   }
+}
+
+// Android 10+ hides the ARP table from apps (no `arp`, no /proc/net/arp). There, devices are found by
+// ping instead: addresses that answered the last sweep are pinged again on each refresh.
+let arpWorks = true;
+const pingSeen = new Set();
+const ipMac = (ip) => `02:00:${ip.split('.').map((n) => (+n).toString(16)).join(':')}`; // stand-in id for devices known only by IP
+async function arpTable() {
+  try { return await getTable(); } catch {}
+  try {
+    return fs.readFileSync('/proc/net/arp', 'utf8').split('\n').slice(1).map((l) => l.trim().split(/\s+/))
+      .filter((c) => c.length >= 4 && c[2] !== '0x0').map(([ip, , , mac]) => ({ ip, mac }));
+  } catch {}
+  arpWorks = false;
+  return [];
+}
+async function pingTable() {
+  const ips = [...pingSeen];
+  const results = await Promise.all(ips.map((ip) => ping.promise.probe(ip, { timeout: 1 }).catch(() => ({ alive: false }))));
+  return ips.filter((_, i) => results[i].alive).map((ip) => ({ ip, mac: ipMac(ip) }));
 }
 
 const label = (id) => (db.data.labels[id] ??= {});
@@ -142,7 +166,8 @@ function upsert(row, now) {
 
 async function refresh() {
   const now = Date.now();
-  const rows = (await getTable()).filter((r) => !isNoise(r));
+  let rows = (await arpTable()).filter((r) => !isNoise(r));
+  if (!arpWorks) rows = await pingTable();
   // macOS hides this machine's MAC from os.networkInterfaces(), so match ourselves by IP.
   const me = selfIp();
   for (const r of rows) r.isSelf = r.ip === me;
@@ -164,6 +189,8 @@ async function refresh() {
 
 // ---- Bluetooth worker (optional) ----
 function startBle() {
+  // fork() would start a second copy of the Android app, and noble has no Android backend.
+  if (ANDROID) { ble = { status: 'unavailable', list: [] }; return; }
   const child = fork(new URL('./ble.js', import.meta.url), { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
   child.on('message', (m) => {
     if (m.type === 'state') ble.status = m.state;
@@ -332,8 +359,8 @@ io.on('connection', async (socket) => {
     const ip = v4(socket.handshake.address);
     let d = [...devices.values()].find((x) => x.ip === ip);
     if (!d) {
-      const mac = await toMAC(ip);
-      d = upsert({ ip, mac: mac ?? `00:00:${ip.split('.').map((n) => (+n).toString(16)).join(':')}` }, Date.now());
+      const mac = arpWorks ? await toMAC(ip).catch(() => null) : null;
+      d = upsert({ ip, mac: mac ?? ipMac(ip) }, Date.now());
     }
     socket.data.deviceId = d.id;
     socket.join(`dev:${d.id}`);
@@ -547,7 +574,9 @@ function sweep() {
     let alive = 0;
     io.emit('scan', 'started');
     for (let i = 0; i < ips.length; i += 32) {
-      const results = await Promise.all(ips.slice(i, i + 32).map((ip) => ping.promise.probe(ip, { timeout: 1 }).catch(() => ({ alive: false }))));
+      const batch = ips.slice(i, i + 32);
+      const results = await Promise.all(batch.map((ip) => ping.promise.probe(ip, { timeout: 1 }).catch(() => ({ alive: false }))));
+      batch.forEach((ip, j) => results[j].alive && pingSeen.add(ip));
       alive += results.filter((r) => r.alive).length;
     }
     await refresh();

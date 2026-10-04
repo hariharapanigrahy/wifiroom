@@ -186,6 +186,22 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 
 Bug reports from Windows and Linux are very welcome.
 
+### Android app (host the room on a phone)
+
+`android/` is a small app that runs the WiFiRoom server on the phone itself, using [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) (Node 18), and shows the room. Others on the same Wi-Fi, or on the phone's own hotspot, join at the address in its notification (`http://<phone IP>:4321`). It keeps running in the background until you tap **Stop** in the notification.
+
+```bash
+cd android && ./gradlew assembleDebug    # needs the Android SDK + NDK (Android Studio) and JDK 17+
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+What's different on a phone:
+
+- **No ARP table on Android 10+**, so the phone can't see devices that stay quiet. It finds devices that answer a ping instead and pings them again to see who's still here. Makers are never shown (no hardware addresses), and many phones don't answer pings, so they appear once they open the room.
+- **No Bluetooth radar, screen sharing (no ffmpeg) or AirPlay mirroring.** Casting, smart-home control and Bonjour names still work.
+- **No short address.** Port 80 isn't allowed on Android, and most Android phones can't open `.local` names.
+- **64-bit ARM only** (nearly every phone since 2017), which keeps the APK around 65 MB.
+
 ## Built from
 
 WiFiRoom is glue between open-source packages. Every direct dependency is MIT licensed, except the two Apache-2.0 packages listed below:
