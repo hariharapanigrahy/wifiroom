@@ -13,7 +13,8 @@ const fmtM = (m) => (m > RADAR_MAX_M ? "10 m+" : `~${m} m`); // beyond ~10 m the
 const params = new URLSearchParams(location.search);
 const socket = io({ autoConnect: false, auth: { code: params.get('code') ?? '' } });
 const chars = new Map(); // id -> { sprite, label, zzz, d }
-const state = { host: false, you: null, devices: new Map(), ble: { status: 'starting', list: [] }, bleAngles: {}, reactions: [], firstSync: true, selected: null };
+const state = { host: false, you: null, devices: new Map(), ble: { status: 'starting', list: [] }, bleAngles: {}, reactions: [], firstSync: true, selected: null, home: { list: [], homeAssistant: {} }, snapshots: {} };
+const HOME_ICONS = { light: '💡', switch: '🔌', plug: '🔌', climate: '🌡️', camera: '📷', cover: '🪟', bridge: '🌉' };
 let room, radar;
 
 const $ = (id) => document.getElementById(id);
@@ -269,7 +270,7 @@ function devicePanel(d) {
 
   // Wake only makes sense for devices that aren't awake; offline ones can be woken via the MCP tools.
   const caps = (d.caps ?? []).filter((c) => c !== 'wake' || d.status !== 'here');
-  if (state.host && (caps.includes('cast') || caps.includes('dlna') || caps.includes('wake'))) out.push(...controlSection(d, caps));
+  if (state.host && ['cast', 'dlna', 'screen', 'home', 'wake'].some((c) => caps.includes(c))) out.push(...controlSection(d, caps));
 
   if (state.host) {
     out.push(h3('Manage'));
@@ -311,9 +312,84 @@ function controlSection(d, caps) {
       ...(caps.includes('dlna') ? [btn('⏸', () => act('pause'), 'ghost'), btn('▶', () => act('resume'), 'ghost')] : []),
       btn('⏹ Stop', () => act('stop'), 'ghost')), vol);
   }
+  if (caps.includes('screen')) {
+    const share = btn(d.sharing ? '⏹ Stop sharing' : '📺 Share my screen', () => {
+      share.disabled = true;
+      share.textContent = d.sharing ? 'Stopping…' : 'Starting… (up to 15 s)';
+      socket.emit('action', { id: d.id, action: d.sharing ? 'screen_stop' : 'screen_start' }, (r) => { share.disabled = false; toast(r.ok ? `📺 ${r.message}` : `⚠️ ${r.error}`); renderPanel(); });
+    });
+    out.push(el('div', { className: 'row', style: 'margin-top:6px' }, share), el('p', { className: 'note', textContent: 'Video only, a few seconds behind. Uses ffmpeg on this computer.' }));
+  }
+  if (caps.includes('home')) for (const e of state.home.list.filter((x) => x.ip === d.ip)) out.push(homeControls(e));
   if (caps.includes('wake')) out.push(el('div', { className: 'row', style: 'margin-top:6px' }, btn('⚡ Wake', () => act('wake'), 'ghost'), el('span', { className: 'note', textContent: 'Turns it on if "wake on LAN / via Wi-Fi" is enabled on the device.' })));
   return out;
 }
+
+// One smart-home device: on/off, brightness, color, temperature or camera snapshot, as it supports.
+function homeControls(e) {
+  const act = (action, value, cb) => socket.emit('home-action', { id: e.id, action, value }, (r) => (cb ? cb(r) : toast(r.ok ? `🏡 ${r.message}` : `⚠️ ${r.error}`)));
+  const keep = (input) => { input.dataset.keep = '1'; input.onblur = () => setTimeout(renderPanel); return input; };
+  const f = e.features ?? [];
+  const on = !['off', 'closed', 'idle'].includes(e.state);
+  const box = el('div', { className: 'home-item' }, el('div', { className: 'row' }, el('strong', { textContent: `${HOME_ICONS[e.type] ?? '🏠'} ${e.name}` }), el('span', { className: 'note', textContent: `${e.state}${e.current != null ? ` · now ${e.current}°` : ''}` })));
+  const row = el('div', { className: 'row', style: 'margin-top:4px' });
+  if (f.includes('power')) {
+    if (e.type === 'cover') row.append(btn('Open', () => act('turn_on'), 'ghost'), btn('Close', () => act('turn_off'), 'ghost'));
+    else row.append(btn(on ? 'Turn off' : 'Turn on', () => act(on ? 'turn_off' : 'turn_on'), on ? '' : 'ghost'));
+  }
+  if (f.includes('color')) {
+    const color = keep(el('input', { type: 'color', value: '#ffffff', className: 'swatch', title: 'Color' }));
+    color.onchange = () => act('set_color', color.value);
+    row.append(color);
+  }
+  if (f.includes('temperature')) {
+    const t = keep(el('input', { type: 'number', step: 0.5, value: e.temperature ?? '', className: 'temp', title: 'Target temperature' }));
+    row.append(t, btn('Set °', () => act('set_temperature', Number(t.value)), 'ghost'));
+  }
+  if (f.includes('snapshot')) row.append(btn('📷 Snapshot', () => act('snapshot', undefined, (r) => {
+    if (!r.ok) return toast(`⚠️ ${r.error}`);
+    state.snapshots[e.id] = r.data ? `data:${r.mime};base64,${r.data}` : { url: r.url };
+    renderPanel(); renderHome();
+  }), 'ghost'));
+  if (f.includes('pair')) row.append(btn('Pair', () => act('pair')), el('span', { className: 'note', textContent: 'Press the button on the bridge first.' }));
+  if (row.childNodes.length) box.append(row);
+  if (f.includes('brightness')) {
+    const b = keep(el('input', { type: 'range', min: 1, max: 100, value: e.brightness ?? 100, title: 'Brightness', style: 'margin-top:4px' }));
+    b.onchange = () => act('set_brightness', Number(b.value));
+    box.append(b);
+  }
+  const snap = state.snapshots[e.id];
+  if (typeof snap === 'string') box.append(el('img', { src: snap, className: 'snapshot', alt: `Snapshot from ${e.name}` }));
+  else if (snap?.url) box.append(el('p', { className: 'note' }, 'The camera only gave a link: ', el('a', { href: snap.url, target: '_blank', rel: 'noopener', textContent: 'open snapshot' })));
+  return box;
+}
+
+// ---- 🏡 Home list (host only): every smart-home device, including Home Assistant entities ----
+function renderHome() {
+  if (!$('home').classList.contains('open')) return;
+  if (document.activeElement?.dataset?.keep && $('home-list').contains(document.activeElement)) return;
+  const ha = state.home.homeAssistant ?? {};
+  $('home-status').textContent = { connected: '🟢 Home Assistant connected', connecting: 'Connecting to Home Assistant…', reconnecting: 'Reconnecting to Home Assistant…', error: `⚠️ ${ha.error}` }[ha.status] ?? 'Home Assistant not set up (optional)';
+  const list = state.home.list;
+  $('home-list').replaceChildren(...(list.length ? list.map(homeControls) : [el('p', { className: 'note', textContent: 'No smart-home devices found yet. Kasa, Hue, Shelly, LIFX and ONVIF cameras show up automatically; connect Home Assistant for everything else.' })]));
+}
+$('open-home').onclick = () => { $('home').classList.add('open'); renderHome(); };
+$('open-home-settings').onclick = () => socket.emit('home-settings', (s) => {
+  $('ha-url').value = s.haUrl; $('ha-token').value = ''; $('ha-token').placeholder = s.haHasToken ? 'Saved (leave empty to keep)' : 'Long-lived access token';
+  $('onvif-user').value = s.onvifUser; $('onvif-pass').value = ''; $('onvif-pass').placeholder = s.onvifHasPassword ? 'Saved (leave empty to keep)' : 'Camera password';
+  $('home-settings-err').textContent = '';
+  $('home-settings').classList.add('open');
+});
+$('home-settings-form').onsubmit = (ev) => {
+  ev.preventDefault();
+  $('home-settings-err').textContent = 'Saving…';
+  socket.emit('home-settings-save', { haUrl: $('ha-url').value, haToken: $('ha-token').value, onvifUser: $('onvif-user').value, onvifPassword: $('onvif-pass').value }, (r) => {
+    if (!r.ok) { $('home-settings-err').textContent = r.error; return; }
+    if (r.status?.status === 'error') { $('home-settings-err').textContent = r.status.error; return; }
+    $('home-settings').classList.remove('open');
+    toast('🏡 Saved');
+  });
+};
 
 // "Find my phone": loud beeps, vibration and a flashing screen until someone taps it.
 let ringing = null;
@@ -394,6 +470,7 @@ socket.on('you', ({ id }) => { state.you = id; $('join').classList.remove('open'
 socket.on('devices', (list) => { state.devices = new Map(list.map((d) => [d.id, d])); syncRoom(list); });
 socket.on('ble', (b) => { state.ble = b; syncRadar(); for (const d of state.devices.values()) if (chars.has(d.id)) updateChar(d); });
 socket.on('ble-angles', (a) => { state.bleAngles = a; syncRadar(); });
+socket.on('home', (h) => { state.home = h; renderHome(); if (state.selected?.type === 'device') renderPanel(); });
 
 socket.on('arrived', ({ id, unknown }) => {
   const d = state.devices.get(id);

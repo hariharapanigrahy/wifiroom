@@ -55,6 +55,12 @@
     #ring { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-size: 20px; color: #fff; animation: flash .35s steps(1) infinite; cursor: pointer; padding: 24px; }
     #ring > div { font-size: 96px; }
     @keyframes flash { 0% { background: #eb5757; } 50% { background: #1b1420; } }
+    .home-item { border-top: 1px solid #ffffff14; padding: 8px 0; }
+    .home-item input[type=range] { padding: 0; }
+    .row input.swatch { flex: 0 0 36px; height: 30px; padding: 2px; }
+    .row input.temp { flex: 0 0 72px; }
+    .snapshot { width: 100%; border-radius: 4px; margin-top: 6px; display: block; }
+    #home-settings label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
     footer { color: var(--muted); font-size: 11px; padding: 10px; text-align: center; }
     @media (max-width: 640px) { #panel { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 60vh; border-radius: 10px 10px 0 0; z-index: 20; } }
   </style>
@@ -66,6 +72,7 @@
       <div class="bar">
         <button class="tab on" data-view="room">🏠 Room</button>
         <button class="tab" data-view="radar">📡 Radar</button>
+        <button class="ghost host-only" id="open-home">🏡 Home</button>
         <button class="ghost host-only" id="open-timeline">🕒 Timeline</button>
         <button class="ghost host-only" id="alerts">🔔 Alerts</button>
         <button class="host-only" id="open-invite">📲 Invite</button>
@@ -110,6 +117,29 @@
     <button class="close" data-close>✕</button>
     <h2>Who's been around</h2>
     <ol id="timeline-list"></ol>
+  </div></div>
+
+  <div class="modal" id="home"><div>
+    <button class="close" data-close>✕</button>
+    <h2>🏡 Home</h2>
+    <div class="row"><span class="note" id="home-status" style="flex:1;margin:0"></span><button class="ghost" id="open-home-settings">⚙️ Settings</button></div>
+    <div id="home-list"></div>
+  </div></div>
+
+  <div class="modal" id="home-settings"><div>
+    <button class="close" data-close>✕</button>
+    <h2>Home settings</h2>
+    <form id="home-settings-form" autocomplete="off">
+      <label for="ha-url">Home Assistant URL (optional)</label>
+      <input id="ha-url" placeholder="http://homeassistant.local:8123">
+      <label for="ha-token">Long-lived access token</label>
+      <input id="ha-token" type="password">
+      <p class="note">Create one in Home Assistant under your profile → Security → Long-lived access tokens. The token is saved only on this computer (in ~/.wifiroom/home.json, readable only by you), is never sent to phones in the room, and is used only to talk to your own Home Assistant. Clear the URL to disconnect.</p>
+      <label for="onvif-user">IP camera login (ONVIF, optional)</label>
+      <div class="row"><input id="onvif-user" placeholder="Username"><input id="onvif-pass" type="password"></div>
+      <p><button>Save</button></p>
+      <p class="note" id="home-settings-err" style="color:var(--warn)"></p>
+    </form>
   </div></div>
 
   <script src="/socket.io/socket.io.js"></script>

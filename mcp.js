@@ -40,22 +40,24 @@ const nameOf = (d) => d.nickname || d.bonjourName || (d.isSelf ? 'This computer'
 const text = (t) => ({ content: [{ type: 'text', text: typeof t === 'string' ? t : JSON.stringify(t, null, 2) }] });
 
 // Find a device by id or (part of) its name, including offline devices remembered for wake.
-async function resolve(query, { includeKnown = false } = {}) {
+// `pool` swaps in another list with ids and names (smart-home devices).
+async function resolve(query, { includeKnown = false, pool: from } = {}) {
   const q = String(query).toLowerCase();
-  const pool = devices.map((d) => ({ id: d.id, name: nameOf(d), online: true }));
+  const pool = from ?? devices.map((d) => ({ id: d.id, name: nameOf(d), online: true }));
   if (includeKnown) for (const k of await callNoArgs('known')) if (!pool.some((p) => p.id === k.id)) pool.push({ id: k.id, name: k.name, online: false });
-  const exact = pool.filter((d) => d.id === q || d.name?.toLowerCase() === q);
+  const exact = pool.filter((d) => d.id.toLowerCase() === q || d.name?.toLowerCase() === q);
   const matches = exact.length ? exact : pool.filter((d) => d.name?.toLowerCase().includes(q));
   if (matches.length === 1) return matches[0];
-  throw new Error(matches.length ? `"${query}" matches several devices: ${matches.map((m) => `${m.name} (id ${m.id})`).join(', ')}. Use the id.` : `No device called "${query}". Use list_devices to see names.`);
+  throw new Error(matches.length ? `"${query}" matches several devices: ${matches.map((m) => `${m.name} (id ${m.id})`).join(', ')}. Use the id.` : `No device called "${query}". Use ${from ? 'home_devices' : 'list_devices'} to see names.`);
 }
 
-const server = new McpServer({ name: 'wifiroom', version: '0.2.0' });
+const server = new McpServer({ name: 'wifiroom', version: '0.3.0' });
+// Handlers return plain data (sent as text) or a ready MCP result with `content` (e.g. an image).
 const tool = (name, description, inputSchema, handler) => server.registerTool(name, { description, inputSchema }, async (args) => {
-  try { return text(await handler(args)); } catch (err) { return { ...text(`Error: ${err.message}`), isError: true }; }
+  try { const r = await handler(args); return r?.content ? r : text(r); } catch (err) { return { ...text(`Error: ${err.message}`), isError: true }; }
 });
 
-tool('list_devices', 'List devices on the local Wi-Fi with name, status, zone and what each can do (caps: cast, dlna, wake, ring).', {}, async () =>
+tool('list_devices', 'List devices on the local Wi-Fi with name, status, zone and what each can do (caps: cast, dlna, screen, home, wake, ring).', {}, async () =>
   devices.map((d) => ({ name: nameOf(d), id: d.id, status: d.status, zone: d.zone, ip: d.ip, maker: d.randomMac ? 'hidden (private address)' : d.vendor, joinedRoom: d.visitors > 0, caps: d.caps })));
 
 tool('poke_device', 'Ping a device to check whether it is online and how fast it responds.', { device: z.string().describe('Device name or id') }, async ({ device }) => {
@@ -107,4 +109,42 @@ tool('say_in_room', 'Post a chat message in the room as this computer.', { messa
 tool('who_was_home', 'Recent arrivals and departures on the Wi-Fi, newest first.', {}, async () =>
   (await callNoArgs('timeline')).slice(0, 40).map((e) => `${new Date(e.t).toLocaleString()}: ${e.name} ${e.type}`));
 
+tool('screen_share', "Show this computer's screen on a TV (Google Cast or DLNA; AirPlay on macOS is experimental), or stop. Video only, a few seconds behind. Needs ffmpeg installed.", { device: z.string().describe('TV name or id'), action: z.enum(['start', 'stop']) }, async ({ device, action }) => {
+  const d = await resolve(device);
+  const r = await call('action', { id: d.id, action: `screen_${action}` });
+  if (!r.ok) throw new Error(r.error);
+  return `${d.name}: ${r.message}`;
+});
+
+// Smart-home devices (Kasa, Hue, Shelly, LIFX, ONVIF cameras) and Home Assistant entities.
+const HOME_TYPES = ['light', 'switch', 'plug', 'climate', 'camera', 'cover'];
+const homeDevices = async () => {
+  const snap = await callNoArgs('home-list');
+  return (snap.list ?? []).filter((e) => HOME_TYPES.includes(e.type));
+};
+
+tool('home_devices', 'List smart-home devices (lights, switches, plugs, climate/AC, cameras, covers) with name, id, type and state. Includes Home Assistant entities if it is set up.', {}, async () =>
+  (await homeDevices()).map((e) => ({ name: e.name, id: e.id, type: e.type, state: e.state, ...(e.brightness != null && { brightness: e.brightness }), ...(e.temperature != null && { targetTemperature: e.temperature }), ...(e.current != null && { currentTemperature: e.current }), source: e.source })));
+
+tool('home_control', 'Control a smart-home device: turn on/off, toggle, brightness 0-100, color (name like "red" or hex "#ff8800"), or target temperature for climate/AC. For covers, turn_on opens and turn_off closes.', {
+  device: z.string().describe('Device name or id from home_devices'),
+  action: z.enum(['turn_on', 'turn_off', 'toggle', 'set_brightness', 'set_color', 'set_temperature']),
+  value: z.union([z.number(), z.string()]).optional().describe('Brightness 0-100, color, or temperature'),
+}, async ({ device, action, value }) => {
+  const e = await resolve(device, { pool: await homeDevices() });
+  const r = await call('home-action', { id: e.id, action, value });
+  if (!r.ok) throw new Error(r.error);
+  return r.message;
+});
+
+tool('camera_snapshot', 'Get a current picture from a camera (ONVIF camera or Home Assistant camera).', { device: z.string().describe('Camera name or id from home_devices') }, async ({ device }) => {
+  const e = await resolve(device, { pool: (await homeDevices()).filter((x) => x.type === 'camera') });
+  const r = await call('home-action', { id: e.id, action: 'snapshot' });
+  if (!r.ok) throw new Error(r.error);
+  if (r.data) return { content: [{ type: 'image', data: r.data, mimeType: r.mime }, { type: 'text', text: `Snapshot from ${e.name}` }] };
+  return `${e.name}: the camera didn't hand over the image directly. Snapshot URL (may need the camera's login): ${r.url}`;
+});
+
+// When the AI app disconnects, exit so an in-process WiFiRoom (and any screen share) stops with it.
+process.stdin.on('end', () => process.exit(0));
 await server.connect(new StdioServerTransport());

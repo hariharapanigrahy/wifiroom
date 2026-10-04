@@ -1,6 +1,6 @@
 {
   "name": "wifiroom",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "See who is on your Wi-Fi, as characters in a tiny pixel room. 100% local and passive.",
   "type": "module",
   "bin": {
@@ -12,6 +12,8 @@
     "server.js",
     "ble.js",
     "drivers.js",
+    "home.js",
+    "screen.js",
     "mcp.js"
   ],
   "scripts": {
@@ -41,16 +43,22 @@
     "bonjour-service": "^1.4.4",
     "castv2-client": "^1.2.0",
     "express": "^5.2.1",
+    "home-assistant-js-websocket": "^9.7.0",
+    "lifx-lan-client": "^2.1.2",
     "lowdb": "^7.0.1",
+    "node-hue-api": "^5.0.0-beta.16",
     "node-ssdp": "^4.0.1",
+    "onvif": "^0.8.3",
     "open": "^11.0.4",
     "phaser": "^4.2.1",
     "ping": "^1.0.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.4",
     "socket.io-client": "^4.8.4",
+    "tplink-smarthome-api": "^5.0.0",
     "upnp-mediarenderer-client": "^1.4.0",
     "wake_on_lan": "^1.0.0",
+    "ws": "^8.22.0",
     "youtube-remote": "^1.1.0",
     "zod": "^4.6.5"
   },

@@ -1,6 +1,8 @@
 // Device control glue. Each driver wraps an existing package and attaches capabilities to
 // devices by IP address once it sees them announce a protocol on the network.
 import { createRequire } from 'node:module';
+import { homeAt, homeAction, HOME_ACTIONS } from './home.js';
+import { startScreen, stopScreen, sharingTo, airplayMirror, airplaySharingTo, onScreenChange } from './screen.js';
 const require = createRequire(import.meta.url);
 const { Client: CastClient, DefaultMediaReceiver } = require('castv2-client');
 const { Client: SsdpClient } = require('node-ssdp');
@@ -10,6 +12,7 @@ const YoutubeRemote = require('youtube-remote');
 
 const casts = new Map();  // ip -> { name, port }
 const dlnas = new Map();  // ip -> { location, name }
+const airplays = new Map(); // ip -> AirPlay name (for experimental macOS mirroring)
 
 const youtubeId = (url) => {
   try {
@@ -41,6 +44,11 @@ const cast = {
       player.load({ contentId: url, contentType: guessType(url), streamType: 'BUFFERED' }, { autoplay: true }, (e) => done(e, 'Playing'));
     }));
   },
+  // Screen sharing: a live HLS stream served from this computer.
+  playLive: (ip, url) => withCast(ip, (client, done) => client.launch(DefaultMediaReceiver, (err, player) => {
+    if (err) return done(err);
+    player.load({ contentId: url, contentType: 'application/x-mpegURL', streamType: 'LIVE' }, { autoplay: true }, (e) => done(e, 'Sharing screen'));
+  })),
   setVolume: (ip, level) => withCast(ip, (client, done) => client.setVolume({ level: Math.max(0, Math.min(1, level / 100)) }, (e) => done(e, `Volume ${level}%`))),
   stop: (ip) => withCast(ip, (client, done) => client.getSessions((err, sessions) => {
     if (err || !sessions?.length) return done(err, 'Nothing playing');
@@ -81,6 +89,15 @@ const dlna = {
 
 // ---- discovery ----
 export function startDrivers({ bonjour, onChange }) {
+  onScreenChange(onChange);
+  // Only macOS can mirror to AirPlay (and only experimentally), so don't offer it elsewhere.
+  if (process.platform === 'darwin') bonjour.find({ type: 'airplay' }, (svc) => {
+    const ip = (svc.addresses ?? []).find((a) => a.includes('.'));
+    if (!ip || airplays.has(ip)) return;
+    airplays.set(ip, svc.name);
+    onChange();
+  });
+
   bonjour.find({ type: 'googlecast' }, (svc) => {
     const ip = (svc.addresses ?? []).find((a) => a.includes('.'));
     if (!ip) return;
@@ -101,19 +118,31 @@ export function startDrivers({ bonjour, onChange }) {
 }
 
 // What a device at this IP can do. `mac` enables Wake-on-LAN for devices with a real hardware address.
-export function capabilitiesOf(ip, { mac, randomMac } = {}) {
+export function capabilitiesOf(ip, { mac, randomMac, isSelf } = {}) {
   const caps = [];
   if (casts.has(ip)) caps.push('cast');
   if (dlnas.has(ip)) caps.push('dlna');
+  if (!isSelf && (casts.has(ip) || dlnas.has(ip) || airplays.has(ip))) caps.push('screen');
+  if (homeAt(ip).length) caps.push('home');
   if (mac && !randomMac && !mac.startsWith('02:00:00')) caps.push('wake');
   return caps;
 }
 
+// Which device this computer's screen is currently shown on, if any.
+export const screenTarget = () => sharingTo() ?? airplaySharingTo();
+
 export const castName = (ip) => casts.get(ip)?.name ?? null;
 
-// Run an action on a device. Prefers Cast, then DLNA.
+// Run an action on a device. Prefers Cast, then DLNA (then AirPlay for screen sharing).
 export async function runAction({ ip, mac }, action, args = {}) {
   const viaCast = casts.has(ip), viaDlna = dlnas.has(ip);
+  // Smart-home actions go to the device's entity; a Hue bridge or power strip can have several.
+  if (HOME_ACTIONS.includes(action)) {
+    const here = homeAt(ip);
+    const entity = args.entity ? here.find((e) => e.id === args.entity) : here.length === 1 ? here[0] : null;
+    if (!entity) throw new Error(here.length ? 'Pick which light or plug (args.entity)' : `This device doesn't support "${action}"`);
+    return homeAction(entity.id, action, args.value);
+  }
   const pick = (name) => (viaCast && cast[name] ? cast : viaDlna && dlna[name] ? dlna : null);
   switch (action) {
     case 'play': {
@@ -130,6 +159,17 @@ export async function runAction({ ip, mac }, action, args = {}) {
       const d = pick(action);
       if (d) return d[action](ip);
       break;
+    }
+    case 'screen_start': {
+      if (viaCast) { await startScreen({ ip, kind: 'hls', play: (url) => cast.playLive(ip, url), stopTv: () => cast.stop(ip) }); return 'Sharing your screen (a few seconds behind)'; }
+      if (viaDlna) { await startScreen({ ip, kind: 'ts', play: (url) => dlnaCall(ip, 'load', url, { autoplay: true, contentType: 'video/mp2t' }), stopTv: () => dlnaCall(ip, 'stop') }); return 'Sharing your screen (a few seconds behind)'; }
+      if (airplays.has(ip)) return airplayMirror(ip, airplays.get(ip), true);
+      break;
+    }
+    case 'screen_stop': {
+      if (airplaySharingTo() === ip) return airplayMirror(ip, airplays.get(ip), false);
+      if (sharingTo() !== ip) return 'Not sharing to this device';
+      return stopScreen();
     }
     case 'wake': {
       if (!mac) break;

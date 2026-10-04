@@ -16,7 +16,8 @@ import { toVendor, isRandomMac } from '@network-utils/vendor-lookup';
 import ping from 'ping';
 import QRCode from 'qrcode';
 import { JSONFilePreset } from 'lowdb/node';
-import { startDrivers, capabilitiesOf, castName, runAction } from './drivers.js';
+import { startDrivers, capabilitiesOf, castName, runAction, screenTarget } from './drivers.js';
+import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeSettings } from './home.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -59,6 +60,9 @@ for (const type of ['airplay', 'raop', 'googlecast', 'companion-link', 'hap', 'i
 }
 
 startDrivers({ bonjour, onChange: () => broadcast() });
+// Smart-home devices are host-only: visitors never see or control them.
+const homeSnapshot = () => ({ list: homeList(), ...homeStatus() });
+startHome({ bonjour, dataDir: DATA_DIR, onChange: () => { io.to('host').emit('home', homeSnapshot()); broadcast(); } });
 
 const isNoise = (r) => r.ip.endsWith('.255') || /^(22[4-9]|23\d|169\.254)\./.test(r.ip) || /^(ff:){5}ff$|^(0:){5}0$/i.test(r.mac);
 const normMac = (mac) => mac.toLowerCase().split(':').map((b) => b.padStart(2, '0')).join(':');
@@ -87,9 +91,9 @@ function logEvent(type, d) {
 // The host sees everything; visitors get only what the room needs to draw (no IPs, MACs, Bluetooth).
 function snapshot(forHost) {
   return [...devices.values()].map((d) => {
-    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
+    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), sharing: screenTarget() === d.ip, caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
     if (forHost) return full;
-    const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors } = full;
+    const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors } = full; // no `sharing`, no home devices
     return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, caps: visitors ? ['ring'] : [] };
   });
 }
@@ -178,6 +182,7 @@ io.on('connection', async (socket) => {
   if (host) {
     socket.emit('ble', ble);
     socket.emit('ble-angles', db.data.bleAngles ?? {});
+    socket.emit('home', homeSnapshot());
   }
 
   // Simple per-socket throttle so one visitor can't flood the room.
@@ -291,6 +296,24 @@ io.on('connection', async (socket) => {
     } catch (err) {
       ack?.({ ok: false, error: err.message });
     }
+  });
+
+  // Smart-home devices and Home Assistant entities (host only).
+  socket.on('home-list', (ack) => host && ack?.(homeSnapshot()));
+  socket.on('home-action', async ({ id, action, value } = {}, ack) => {
+    if (!host) return ack?.({ ok: false, error: 'Not allowed' }); // no throttle: voice assistants send commands back to back
+    try {
+      const result = await homeAction(String(id), String(action), value);
+      ack?.(typeof result === 'string' ? { ok: true, message: result } : { ok: true, ...result });
+    } catch (err) {
+      ack?.({ ok: false, error: err.message });
+    }
+  });
+  // The Home Assistant token is accepted here but never sent back to a browser.
+  socket.on('home-settings', (ack) => host && ack?.(getHomeSettings()));
+  socket.on('home-settings-save', async (values = {}, ack) => {
+    if (!host) return ack?.({ ok: false, error: 'Not allowed' });
+    try { ack?.({ ok: true, ...(await saveHomeSettings(values)) }); } catch (err) { ack?.({ ok: false, error: err.message }); }
   });
 
   // Devices seen before with a real hardware address, including ones that are offline now (for wake).
