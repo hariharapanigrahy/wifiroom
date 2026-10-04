@@ -388,6 +388,19 @@ function sweep() {
   return sweeping;
 }
 
+// Idle wandering, decided here so every viewer sees the same room. Awake characters take a few steps
+// within their zone now and then; sleeping ones and people who joined from a phone (they steer) stay put.
+setInterval(() => {
+  let moved = false;
+  for (const d of devices.values()) {
+    if (d.status !== 'here' || visitorsOf(d.id) || Math.random() > 0.3) continue;
+    const step = () => (Math.random() - 0.5) * 3; // up to 1.5 tiles each way
+    d.pos = clampTo(zoneOf(d), { x: d.pos.x + step(), y: d.pos.y + step() });
+    moved = true;
+  }
+  if (moved) broadcast();
+}, 3000);
+
 refresh();
 setInterval(refresh, POLL_MS);
 if (!PASSIVE) { sweep(); setInterval(sweep, SWEEP_EVERY_MS); }
