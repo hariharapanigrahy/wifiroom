@@ -199,7 +199,7 @@ What's different on a phone:
 
 - **No ARP table on Android 10+**, so the phone can't see devices that stay quiet. It finds devices that answer a ping instead and pings them again to see who's still here. Makers are never shown (no hardware addresses), and many phones don't answer pings, so they appear once they open the room.
 - **No Bluetooth radar, screen sharing (no ffmpeg) or AirPlay mirroring.** Casting, smart-home control and Bonjour names still work.
-- **No short address.** Port 80 isn't allowed on Android, and most Android phones can't open `.local` names.
+- **The short address works** (`http://<phone IP>` redirects into the room), but most Android phones can't open `.local` names.
 - **64-bit ARM only** (nearly every phone since 2017), which keeps the APK around 65 MB.
 
 ## Built from
