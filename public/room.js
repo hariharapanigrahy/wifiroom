@@ -48,20 +48,21 @@ class Room extends Phaser.Scene {
     if (PHONE) {
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tile(r === 0 || r === ROWS - 1 ? TILES.wall : TILES.floor, c, r);
       tile(TILES.door, 6, ROWS - 1); tile(TILES.chest, 8, 1); tile(TILES.barrel, 8, ROWS - 2);
-      g.fillStyle(0x6fcf97, 0.08).fillRect(T * 0.5, T * 1.6, W - T, T * 9.8);
-      g.fillStyle(0xeb5757, 0.08).fillRect(T * 0.5, T * 11.6, W - T, T * 9.8);
+      g.fillStyle(0x6fcf97, 0.16).fillRect(T * 0.5, T * 1.6, W - T, T * 9.8);
+      g.fillStyle(0xeb5757, 0.16).fillRect(T * 0.5, T * 11.6, W - T, T * 9.8);
       g.lineStyle(2, 0x000000, 0.35).lineBetween(T * 0.4, T * 11.5, W - T * 0.4, T * 11.5);
       this.add.text(T * 0.7, T * 1.65, 'TRUSTED', zoneText);
       this.add.text(T * 0.7, T * 11.65, 'UNKNOWN · by the door', zoneText);
     } else {
       for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tile(r === 0 ? TILES.wall : TILES.floor, c, r);
       tile(TILES.door, 16, 0); tile(TILES.chest, 8, 1); tile(TILES.barrel, 18, 1);
-      g.fillStyle(0x6fcf97, 0.08).fillRect(T * 0.5, T * 1.6, DIVIDER - T, T * 10);
-      g.fillStyle(0xeb5757, 0.08).fillRect(DIVIDER + T * 0.5, T * 1.6, DIVIDER - T, T * 10);
+      g.fillStyle(0x6fcf97, 0.16).fillRect(T * 0.5, T * 1.6, DIVIDER - T, T * 10);
+      g.fillStyle(0xeb5757, 0.16).fillRect(DIVIDER + T * 0.5, T * 1.6, DIVIDER - T, T * 10);
       g.lineStyle(2, 0x000000, 0.35).lineBetween(DIVIDER, T * 1.4, DIVIDER, H - T * 0.4);
       this.add.text(T * 0.7, T * 1.65, 'TRUSTED', zoneText);
       this.add.text(DIVIDER + T * 0.7, T * 1.65, 'UNKNOWN · by the door', zoneText);
     }
+    this.children.bringToTop(g); // the zone tints and divider were created before the floor tiles; keep them above it
 
     // Tap the floor to walk your own character there (host walks the laptop's wizard).
     this.input.on('pointerdown', (p, over) => { if (!over.length && myId()) socket.emit('move', toRoom(p.worldX, p.worldY)); });
@@ -270,6 +271,7 @@ function devicePanel(d) {
   if (!isMe && myId()) {
     out.push(h3('Interact'));
     out.push(el('div', { className: 'row' }, btn('👉 Poke', () => socket.emit('poke', { to: d.id })),
+      ...(d.chatKey ? [btn('💬 Private chat', () => openDm(d.id))] : []),
       ...(d.caps?.includes('ring') ? [btn('🔔 Ring', () => socket.emit('ring', { to: d.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`)))] : []),
       ...state.reactions.map((e) => btn(e, () => socket.emit('react', { to: d.id, emoji: e }), 'emoji'))));
     const link = el('input', { placeholder: 'Paste a YouTube / Instagram / any link', type: 'text', inputMode: 'url' });
@@ -462,7 +464,7 @@ socket.on('hello', (h) => {
     $('lan-warn').style.display = h.lanShared ? 'none' : '';
     $('hint').textContent = 'Click a character to interact · drag to trust · tap the floor to walk · 📡 Radar shows Bluetooth devices nearby';
   } else if (state.you) {
-    socket.emit('join', { name: state.name }); // reconnected (e.g. the phone slept): the server forgot who we are
+    socket.emit('join', { name: state.name, chatKey: myChatKey() }); // reconnected (e.g. the phone slept): the server forgot who we are
   } else {
     $('join-code').style.display = 'none';
     $('join').classList.add('open');
@@ -484,7 +486,7 @@ $('join-form').onsubmit = (e) => {
   const code = $('join-code').value.trim();
   if ($('join-code').style.display !== 'none' && code) { socket.auth.code = code; socket.connect(); }
   state.name = $('join-name').value;
-  socket.emit('join', { name: state.name });
+  socket.emit('join', { name: state.name, chatKey: myChatKey() });
 };
 socket.on('you', ({ id }) => { state.you = id; $('join').classList.remove('open'); document.body.classList.add('in-room'); syncRoom([...state.devices.values()]); });
 

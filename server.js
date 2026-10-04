@@ -27,7 +27,9 @@ const SWEEP_EVERY_MS = 15 * 60_000;
 const HOST = SHARE ? '0.0.0.0' : '127.0.0.1';
 const PKG_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WIFIROOM_DATA || path.join(os.homedir(), '.wifiroom');
-const PHASER_DIST = path.join(path.dirname(createRequire(import.meta.url).resolve('phaser/package.json')), 'dist');
+const require = createRequire(import.meta.url);
+const PHASER_DIST = path.join(path.dirname(require.resolve('phaser/package.json')), 'dist');
+const NACL_DIR = path.dirname(require.resolve('tweetnacl/package.json'));
 // With --code, visitors need this 6-digit code (new every start). Otherwise anyone on the Wi-Fi can walk in.
 const REQUIRE_CODE = process.env.WIFIROOM_CODE === '1';
 const CODE = String(randomInt(100000, 1000000));
@@ -44,6 +46,9 @@ db.data.events ??= [];
 const idOf = (mac) => createHash('sha256').update(mac).digest('hex').slice(0, 12);
 for (const key of Object.keys(db.data.labels)) if (key.includes(':')) { db.data.labels[idOf(key)] = db.data.labels[key]; delete db.data.labels[key]; }
 const devices = new Map();      // id -> device
+// Public keys for private chats, sent by each browser (id -> base64 X25519 key). The private halves never
+// leave the browsers, so this server can only pass encrypted messages along; it can't read them.
+const chatKeys = new Map();
 const bonjourNames = new Map(); // ipv4 -> advertised name
 let ble = { status: 'starting', list: [] };
 let initialized = false;
@@ -51,6 +56,7 @@ let initialized = false;
 const app = express();
 app.use(express.static(path.join(PKG_DIR, 'public')));
 app.use('/lib', express.static(PHASER_DIST));
+app.get('/lib/nacl-fast.min.js', (req, res) => res.sendFile(path.join(NACL_DIR, 'nacl-fast.min.js'))); // private chat encryption
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -95,11 +101,16 @@ function logEvent(type, d) {
 // The host sees everything; visitors get only what the room needs to draw (no IPs, MACs, Bluetooth).
 function snapshot(forHost) {
   return [...devices.values()].map((d) => {
-    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), sharing: screenTarget() === d.ip, caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
+    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), chatKey: chatRoomOf(d) ? chatKeys.get(d.id) : undefined, sharing: screenTarget() === d.ip, caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
     if (forHost) return full;
-    const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors } = full; // no `sharing`, no home devices
-    return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, caps: visitors ? ['ring'] : [] };
+    const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, chatKey } = full; // no `sharing`, no home devices
+    return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, chatKey, caps: visitors ? ['ring'] : [] };
   });
+}
+// The Socket.IO room that reaches a device's open browser tabs (the laptop's own character is the host page).
+function chatRoomOf(d) {
+  const room = d.isSelf ? 'host' : `dev:${d.id}`;
+  return io.sockets.adapter.rooms.get(room)?.size ? room : null;
 }
 const broadcast = () => {
   io.to('host').emit('devices', snapshot(true));
@@ -213,6 +224,7 @@ function ringDevice(from, to) {
   io.to(`dev:${to}`).emit('ring', { from: nameOf(from) });
 }
 
+const isChatKey = (k) => typeof k === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(k); // 32 bytes, base64
 const isHostAddr = (addr) => ['127.0.0.1', '::1', selfIp()].includes(v4(addr));
 
 // ---- local HTTP API (for scripts and the `wifiroom <command>` CLI) ----
@@ -314,7 +326,7 @@ io.on('connection', async (socket) => {
   // Who is acting: the host acts as this laptop; a visitor acts as the device their browser runs on.
   const actor = () => (host ? selfDevice() : devices.get(socket.data.deviceId));
 
-  socket.on('join', async ({ name } = {}) => {
+  socket.on('join', async ({ name, chatKey } = {}) => {
     if (host || !allow('join', 2000)) return;
     const ip = v4(socket.handshake.address);
     let d = [...devices.values()].find((x) => x.ip === ip);
@@ -326,13 +338,14 @@ io.on('connection', async (socket) => {
     socket.join(`dev:${d.id}`);
     const clean = String(name ?? '').trim().slice(0, 40);
     if (clean) label(d.id).nickname = clean;
+    if (isChatKey(chatKey)) chatKeys.set(d.id, chatKey);
     logEvent('joined the room', d);
     socket.emit('you', { id: d.id });
     io.emit('bubble', { id: d.id, text: '👋 joined the room!' });
     broadcast();
   });
 
-  socket.on('disconnect', () => { if (socket.data.deviceId) broadcast(); });
+  socket.on('disconnect', () => { if (host || socket.data.deviceId) broadcast(); }); // their chat key stops being offered
 
   socket.on('move', ({ x, y } = {}) => {
     const d = actor();
@@ -345,6 +358,33 @@ io.on('connection', async (socket) => {
     const d = actor();
     const clean = String(text ?? '').trim().slice(0, 140);
     if (d && clean && allow('say', 1000)) io.emit('bubble', { id: d.id, text: clean });
+  });
+
+  // ---- private and group chats (end-to-end encrypted) ----
+  // The host page has no join step, so it registers its key here.
+  socket.on('chat-key', (chatKey) => {
+    const d = actor();
+    if (!host || !d || !isChatKey(chatKey)) return;
+    chatKeys.set(d.id, chatKey);
+    broadcast();
+  });
+
+  // Each browser encrypts a message once per recipient with nacl.box. This only checks sizes and passes
+  // each recipient its own ciphertext; nothing is stored or logged.
+  socket.on('dm', ({ boxes } = {}, ack) => {
+    const d = actor();
+    if (!d || !chatKeys.has(d.id)) return ack?.({ ok: false, error: 'Join the room first' });
+    if (!allow('dm', 250)) return ack?.({ ok: false, error: 'Slow down a little' });
+    const list = Array.isArray(boxes) ? boxes.slice(0, 12) : [];
+    const missed = [];
+    for (const b of list) {
+      const target = devices.get(b?.to);
+      if (typeof b?.nonce !== 'string' || typeof b?.box !== 'string' || b.nonce.length > 40 || b.box.length > 8000) continue;
+      const room = target && chatRoomOf(target);
+      if (!room || target.id === d.id) { missed.push(b?.to); continue; }
+      io.to(room).emit('dm', { from: d.id, to: target.id, nonce: b.nonce, box: b.box });
+    }
+    ack?.({ ok: true, missed });
   });
 
   socket.on('react', ({ to, emoji } = {}) => {

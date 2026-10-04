@@ -35,6 +35,26 @@
     .close { position: absolute; top: 6px; right: 8px; background: none; color: var(--muted); padding: 2px 6px; }
     .note { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
     #chat { margin-top: 8px; display: none; } body.in-room #chat { display: flex; }
+    .in-room-only { display: none; } body.in-room .in-room-only { display: revert; }
+    .badge { background: var(--warn); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+    .badge:empty { display: none; }
+    #chats > div { width: min(440px, 100%); height: min(640px, 90vh); display: flex; flex-direction: column; padding: 14px; }
+    #chats .top { display: flex; align-items: center; gap: 8px; padding-right: 28px; }
+    #chats .top h2 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #chats .scroll { flex: 1; overflow: auto; margin: 8px 0; min-height: 0; }
+    .lock { color: var(--trust); font-size: 12px; margin: 4px 0 0; }
+    .lock b { color: var(--ink); letter-spacing: 1px; font-weight: normal; }
+    .chat-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: transparent; color: var(--ink); border: 0; border-bottom: 1px solid #ffffff14; border-radius: 0; padding: 10px 2px; }
+    .chat-row .who { flex: 1; min-width: 0; }
+    .chat-row .who div { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pick { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid #ffffff14; }
+    .pick input { width: auto; }
+    .msg { max-width: 82%; margin: 6px 0; padding: 6px 10px; border-radius: 10px; background: #140f17; border: 1px solid #ffffff1a; word-wrap: break-word; white-space: pre-wrap; }
+    .msg.mine { margin-left: auto; background: #3a2f1a; border-color: #f2b84b55; }
+    .msg .meta { display: block; color: var(--muted); font-size: 11px; }
+    .msg.system { max-width: none; background: none; border: 0; color: var(--muted); font-size: 12px; text-align: center; }
+    #chats details { font-size: 12px; color: var(--muted); }
+    #chats details li { margin: 3px 0; }
     #toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; z-index: 30; pointer-events: none; }
     .toast { background: var(--panel); border: 2px solid var(--line); padding: 8px 14px; border-radius: 6px; box-shadow: 0 4px 0 #000; animation: in .25s ease-out; }
     #cards { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 25; width: min(300px, calc(100vw - 24px)); }
@@ -75,6 +95,7 @@
       <div class="bar">
         <button class="tab on" data-view="room">🏠 Room</button>
         <button class="tab" data-view="radar">📡 Radar</button>
+        <button class="ghost in-room-only" id="open-chats">💬 Chats<span class="badge" id="chats-badge"></span></button>
         <button class="ghost host-only" id="open-home">🏡 Home</button>
         <button class="ghost host-only" id="open-timeline">🕒 Timeline</button>
         <button class="ghost host-only" id="alerts">🔔 Alerts</button>
@@ -117,6 +138,14 @@
     </form>
   </div></div>
 
+  <div class="modal" id="chats"><div>
+    <button class="close" data-close>✕</button>
+    <div class="top"><button class="ghost" id="chats-back" type="button" aria-label="Back">‹</button><h2 id="chats-title">💬 Private chats</h2></div>
+    <div id="chats-sub"></div>
+    <div class="scroll" id="chats-body"></div>
+    <form id="chats-form" class="row" autocomplete="off"><input id="chats-text" maxlength="1000" placeholder="Message…" data-keep="1"><button>Send</button></form>
+  </div></div>
+
   <div class="modal" id="timeline"><div>
     <button class="close" data-close>✕</button>
     <h2>Who's been around</h2>
@@ -148,6 +177,8 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/lib/phaser.min.js"></script>
+  <script src="/lib/nacl-fast.min.js"></script>
   <script src="room.js"></script>
+  <script src="chat.js"></script>
 </body>
 </html>
