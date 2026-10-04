@@ -362,7 +362,9 @@ io.on('connection', async (socket) => {
     const d = actor(), target = devices.get(to);
     let link;
     try { link = new URL(String(url)); } catch { return ack?.({ ok: false, error: 'Not a valid link' }); }
-    if (!d || !target || !/^https?:$/.test(link.protocol)) return ack?.({ ok: false, error: 'Not a valid link' });
+    if (!/^https?:$/.test(link.protocol)) return ack?.({ ok: false, error: 'Only http(s) links can be sent' });
+    if (!d) return ack?.({ ok: false, error: 'Join the room first' });
+    if (!target) return ack?.({ ok: false, error: 'That device left the room' });
     if (!allow('share', 2000)) return ack?.({ ok: false, error: 'Slow down a little' });
     const room = target.isSelf ? 'host' : `dev:${to}`;
     const delivered = (io.sockets.adapter.rooms.get(room)?.size ?? 0) > 0;

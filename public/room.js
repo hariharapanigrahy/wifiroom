@@ -1,9 +1,16 @@
 // WiFiRoom client glue: renders the server's shared room state with Phaser.
 const S = 3;            // pixel-art scale
 const T = 16 * S;       // tile size on screen
-const COLS = 20, ROWS = 12, W = COLS * T, H = ROWS * T;
-const DIVIDER = 10 * T; // left of this = trusted, right = unknown
-const DOOR = { x: 16.5 * T, y: 0.9 * T };
+// Phones get a tall room instead of a wide one: the trusted half on top, the unknown half below it and the
+// door at the bottom. The server's positions stay in the wide layout; toScreen/toRoom convert.
+const PHONE = matchMedia('(max-width: 640px)').matches;
+if (PHONE) document.body.classList.add('phone');
+const px = (n) => `${PHONE ? Math.round(n * 1.4) : n}px`; // text is drawn bigger on phones so it stays readable
+const COLS = PHONE ? 10 : 20, ROWS = PHONE ? 23 : 12, W = COLS * T, H = ROWS * T;
+const DIVIDER = 10 * T; // left of this = trusted, right = unknown (in the wide layout)
+const toScreen = (x, y) => (!PHONE || x < 10 ? { x: x * T, y: y * T } : { x: (x - 10) * T, y: (23 - y) * T });
+const toRoom = (sx, sy) => { const x = sx / T, y = sy / T; return !PHONE || y < 11.5 ? { x, y } : { x: x + 10, y: 23 - y }; };
+const DOOR = toScreen(16.5, 0.9);
 const FRAMES = { self: 84, ghost: 108, people: [85, 86, 87, 88, 96, 97, 98, 99, 100, 111, 112] };
 const TILES = { wall: 40, floor: 49, door: 45, chest: 89, barrel: 82 };
 const BLE_ICONS = { 'AirPods': '🎧', 'Apple device': '📱', 'Find My item': '🏷️', 'AirPlay': '📺', 'Apple': '🍎', 'Named device': '🔵', 'Bluetooth device': '⚪' };
@@ -23,6 +30,8 @@ const isUnknown = (d) => !d.isSelf && d.zone !== 'trusted' && !d.nickname;
 const frameOf = (d) => (d.isSelf ? FRAMES.self : isUnknown(d) ? FRAMES.ghost : FRAMES.people[hash(d.id) % FRAMES.people.length]);
 const nameOf = (d) => d.nickname || d.bonjourName || (d.isSelf ? 'This laptop' : d.randomMac ? 'Mystery phone?' : (d.vendor || '').replace(/<unknown>/, 'Unknown'));
 const bleOf = (d) => d.bleId && state.ble.list.find((b) => b.id === d.bleId);
+// Apps often copy "Check this out https://…"; pick out the link, and add https:// when it's missing.
+const linkIn = (text) => { const t = text.trim(); const m = t.match(/https?:\/\/\S+/i); return m ? m[0] : /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(t) ? `https://${t}` : t; };
 const myId = () => (state.host ? [...state.devices.values()].find((d) => d.isSelf)?.id : state.you);
 const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
 
@@ -34,28 +43,37 @@ class Room extends Phaser.Scene {
   create() {
     room = this;
     const tile = (f, c, r) => this.add.image(c * T, r * T, 'tiles', f).setOrigin(0).setScale(S);
-    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tile(r === 0 ? TILES.wall : TILES.floor, c, r);
-    tile(TILES.door, 16, 0); tile(TILES.chest, 8, 1); tile(TILES.barrel, 18, 1);
-
     const g = this.add.graphics();
-    g.fillStyle(0x6fcf97, 0.08).fillRect(T * 0.5, T * 1.6, DIVIDER - T, T * 10);
-    g.fillStyle(0xeb5757, 0.08).fillRect(DIVIDER + T * 0.5, T * 1.6, DIVIDER - T, T * 10);
-    g.lineStyle(2, 0x000000, 0.35).lineBetween(DIVIDER, T * 1.4, DIVIDER, H - T * 0.4);
-    const zoneText = { fontFamily: 'monospace', fontSize: '16px', color: '#3a2a20' };
-    this.add.text(T * 0.7, T * 1.65, 'TRUSTED', zoneText);
-    this.add.text(DIVIDER + T * 0.7, T * 1.65, 'UNKNOWN · by the door', zoneText);
+    const zoneText = { fontFamily: 'monospace', fontSize: px(16), color: '#3a2a20' };
+    if (PHONE) {
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tile(r === 0 || r === ROWS - 1 ? TILES.wall : TILES.floor, c, r);
+      tile(TILES.door, 6, ROWS - 1); tile(TILES.chest, 8, 1); tile(TILES.barrel, 8, ROWS - 2);
+      g.fillStyle(0x6fcf97, 0.08).fillRect(T * 0.5, T * 1.6, W - T, T * 9.8);
+      g.fillStyle(0xeb5757, 0.08).fillRect(T * 0.5, T * 11.6, W - T, T * 9.8);
+      g.lineStyle(2, 0x000000, 0.35).lineBetween(T * 0.4, T * 11.5, W - T * 0.4, T * 11.5);
+      this.add.text(T * 0.7, T * 1.65, 'TRUSTED', zoneText);
+      this.add.text(T * 0.7, T * 11.65, 'UNKNOWN · by the door', zoneText);
+    } else {
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) tile(r === 0 ? TILES.wall : TILES.floor, c, r);
+      tile(TILES.door, 16, 0); tile(TILES.chest, 8, 1); tile(TILES.barrel, 18, 1);
+      g.fillStyle(0x6fcf97, 0.08).fillRect(T * 0.5, T * 1.6, DIVIDER - T, T * 10);
+      g.fillStyle(0xeb5757, 0.08).fillRect(DIVIDER + T * 0.5, T * 1.6, DIVIDER - T, T * 10);
+      g.lineStyle(2, 0x000000, 0.35).lineBetween(DIVIDER, T * 1.4, DIVIDER, H - T * 0.4);
+      this.add.text(T * 0.7, T * 1.65, 'TRUSTED', zoneText);
+      this.add.text(DIVIDER + T * 0.7, T * 1.65, 'UNKNOWN · by the door', zoneText);
+    }
 
     // Tap the floor to walk your own character there (host walks the laptop's wizard).
-    this.input.on('pointerdown', (p, over) => { if (!over.length && myId()) socket.emit('move', { x: p.worldX / T, y: p.worldY / T }); });
+    this.input.on('pointerdown', (p, over) => { if (!over.length && myId()) socket.emit('move', toRoom(p.worldX, p.worldY)); });
     this.input.on('drag', (_p, obj, x, y) => { obj.setPosition(x, y); obj.dragged = true; });
-    this.input.on('dragend', (_p, obj) => { if (obj.dragged) socket.emit('place', { id: obj.deviceId, x: obj.x / T, y: obj.y / T }); });
+    this.input.on('dragend', (_p, obj) => { if (obj.dragged) socket.emit('place', { id: obj.deviceId, ...toRoom(obj.x, obj.y) }); });
     this.scene.launch('radar');
     socket.connect();
   }
 
   update() {
     for (const c of chars.values()) {
-      c.label.setPosition(c.sprite.x, c.sprite.y - T * 0.6);
+      c.label.setPosition(Phaser.Math.Clamp(c.sprite.x, c.label.width / 2, W - c.label.width / 2), c.sprite.y - T * 0.6); // keep long names on screen
       c.zzz.setPosition(c.sprite.x + T * 0.35, c.sprite.y - T * 0.9);
     }
   }
@@ -79,7 +97,7 @@ function enter(d) {
   sprite.on('pointerdown', () => { sprite.dragged = false; sprite.pressed = true; });
   sprite.on('pointerup', () => { if (sprite.pressed && !sprite.dragged) openPanel({ type: 'device', id: d.id }); sprite.pressed = false; });
   room.input.on('pointerup', () => { sprite.pressed = false; });
-  const label = room.add.text(DOOR.x, DOOR.y, '', { fontFamily: 'monospace', fontSize: '13px', color: '#fff', backgroundColor: '#000a', padding: { x: 4, y: 1 } }).setOrigin(0.5, 1).setDepth(5);
+  const label = room.add.text(DOOR.x, DOOR.y, '', { fontFamily: 'monospace', fontSize: px(13), color: '#fff', backgroundColor: '#000a', padding: { x: 4, y: 1 } }).setOrigin(0.5, 1).setDepth(5);
   const zzz = room.add.text(0, 0, 'z', { fontFamily: 'monospace', fontSize: '16px', color: '#cfe3ff' }).setVisible(false).setDepth(5);
   room.tweens.add({ targets: zzz, alpha: 0.3, yoyo: true, repeat: -1, duration: 900 });
   // Idle "breathing" so still characters look alive without pretending to move.
@@ -98,7 +116,7 @@ function updateChar(d) {
   const asleep = d.status === 'asleep';
   c.sprite.setAlpha(asleep ? 0.55 : 1);
   c.zzz.setVisible(asleep);
-  const to = { x: d.pos.x * T, y: d.pos.y * T };
+  const to = toScreen(d.pos.x, d.pos.y);
   if (!c.target || c.target.x !== to.x || c.target.y !== to.y) {
     c.target = to;
     walk(c, to);
@@ -123,7 +141,7 @@ function walk(c, to, onComplete) {
 }
 
 function floatText(x, y, text, opts = {}) {
-  const t = room.add.text(x, y, text, { fontFamily: 'monospace', fontSize: opts.size ?? '14px', color: '#1b1420', backgroundColor: opts.bg ?? '#fff', padding: { x: 6, y: 3 }, wordWrap: { width: 220 }, align: 'center' }).setOrigin(0.5, 1).setDepth(10);
+  const t = room.add.text(x, y, text, { fontFamily: 'monospace', fontSize: opts.size ?? px(14), color: '#1b1420', backgroundColor: opts.bg ?? '#fff', padding: { x: 6, y: 3 }, wordWrap: { width: 220 }, align: 'center' }).setOrigin(0.5, 1).setDepth(10);
   room.tweens.add({ targets: t, y: y - (opts.rise ?? 10), alpha: { from: 1, to: 0 }, delay: opts.hold ?? 3500, duration: 600, onComplete: () => t.destroy() });
   return t;
 }
@@ -148,7 +166,7 @@ class Radar extends Phaser.Scene {
   create() {
     radar = this;
     this.blips = new Map();
-    this.cx = W / 2; this.cy = H / 2 + T * 0.3; this.R = H / 2 - T * 0.8;
+    this.cx = W / 2; this.cy = H / 2 + T * 0.3; this.R = Math.min(W, H) / 2 - T * 0.8;
     this.add.rectangle(0, 0, W, H, 0x0f1a14).setOrigin(0);
     const g = this.add.graphics();
     for (const m of [1, 2, 5, 10]) {
@@ -254,9 +272,9 @@ function devicePanel(d) {
     out.push(el('div', { className: 'row' }, btn('👉 Poke', () => socket.emit('poke', { to: d.id })),
       ...(d.caps?.includes('ring') ? [btn('🔔 Ring', () => socket.emit('ring', { to: d.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`)))] : []),
       ...state.reactions.map((e) => btn(e, () => socket.emit('react', { to: d.id, emoji: e }), 'emoji'))));
-    const link = el('input', { placeholder: 'Paste a YouTube / Instagram / any link', type: 'url' });
+    const link = el('input', { placeholder: 'Paste a YouTube / Instagram / any link', type: 'text', inputMode: 'url' });
     link.dataset.keep = '1';
-    const send = btn('Send', () => socket.emit('share', { to: d.id, url: link.value.trim() }, (r) => {
+    const send = btn('Send', () => socket.emit('share', { to: d.id, url: linkIn(link.value) }, (r) => {
       if (!r.ok) return toast(`⚠️ ${r.error}`);
       link.value = '';
       toast(r.delivered ? '📨 Delivered to their screen' : '📭 They haven\'t joined the room — try Share or Message below');
@@ -443,7 +461,9 @@ socket.on('hello', (h) => {
     $('qr').src = h.qr; $('code').textContent = h.code ?? ''; $('join-url').textContent = h.joinUrl;
     $('lan-warn').style.display = h.lanShared ? 'none' : '';
     $('hint').textContent = 'Click a character to interact · drag to trust · tap the floor to walk · 📡 Radar shows Bluetooth devices nearby';
-  } else if (!state.you) {
+  } else if (state.you) {
+    socket.emit('join', { name: state.name }); // reconnected (e.g. the phone slept): the server forgot who we are
+  } else {
     $('join-code').style.display = 'none';
     $('join').classList.add('open');
     $('join-name').focus();
@@ -463,7 +483,8 @@ $('join-form').onsubmit = (e) => {
   window.__audio ??= new AudioContext(); // phones only allow sound after a tap; this tap unlocks "ring"
   const code = $('join-code').value.trim();
   if ($('join-code').style.display !== 'none' && code) { socket.auth.code = code; socket.connect(); }
-  socket.emit('join', { name: $('join-name').value });
+  state.name = $('join-name').value;
+  socket.emit('join', { name: state.name });
 };
 socket.on('you', ({ id }) => { state.you = id; $('join').classList.remove('open'); document.body.classList.add('in-room'); syncRoom([...state.devices.values()]); });
 
@@ -534,5 +555,6 @@ function toast(msg) {
 
 new Phaser.Game({
   type: Phaser.AUTO, parent: 'room', width: W, height: H, pixelArt: true, backgroundColor: '#1b1420', scene: [Room, Radar],
-  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_HORIZONTALLY },
+  input: { touch: { capture: !PHONE }, mouse: { preventDefaultWheel: !PHONE } }, // the tall phone room must still scroll the page
+  scale: PHONE ? { mode: Phaser.Scale.WIDTH_CONTROLS_HEIGHT } : { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_HORIZONTALLY },
 });
