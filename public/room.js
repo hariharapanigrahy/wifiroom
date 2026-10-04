@@ -507,6 +507,8 @@ socket.on('card', ({ from, url }) => {
 // ================= UI wiring =================
 $('chat').onsubmit = (e) => { e.preventDefault(); socket.emit('say', $('chat-text').value); $('chat-text').value = ''; };
 $('open-invite').onclick = () => $('invite').classList.add('open');
+$('scan').onclick = () => socket.emit('scan', (r) => toast(r?.ok ? `📡 Scan finished: ${r.devices} devices` : 'Scan failed'));
+socket.on('scan', (s) => { $('scan').disabled = s === 'started'; $('scan').textContent = s === 'started' ? 'Scanning…' : 'Scan'; });
 document.querySelectorAll('[data-close]').forEach((b) => (b.onclick = () => b.closest('.modal').classList.remove('open')));
 document.querySelectorAll('.tab').forEach((t) => (t.onclick = () => {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === t));

@@ -106,6 +106,12 @@ tool('say_in_room', 'Post a chat message in the room as this computer.', { messa
   return 'Sent';
 });
 
+tool('scan_network', 'Ping every address on the home network once to find devices that have been quiet (takes about 10 seconds), then list them.', {}, async () => {
+  const r = await call('scan', undefined);
+  await new Promise((res) => setTimeout(res, 800)); // let the refreshed device list arrive
+  return { scanned: r?.ok ?? false, devices: devices.map((d) => ({ name: nameOf(d), status: d.status, ip: d.ip, caps: d.caps })) };
+});
+
 tool('who_was_home', 'Recent arrivals and departures on the Wi-Fi, newest first.', {}, async () =>
   (await callNoArgs('timeline')).slice(0, 40).map((e) => `${new Date(e.t).toLocaleString()}: ${e.name} ${e.type}`));
 

@@ -8,6 +8,7 @@ const { values, positionals } = parseArgs({
     share: { type: 'boolean', default: false },
     port: { type: 'string', default: '4321' },
     'no-open': { type: 'boolean', default: false },
+    passive: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
 });
@@ -22,6 +23,7 @@ if (values.help) {
     --share       Let phones on your Wi-Fi join the room (they need a 6-digit code)
     --port <n>    Port to use (default 4321)
     --no-open     Don't open the browser automatically
+    --passive     Only listen; don't ping the network to find quiet devices
     -h, --help    Show this help
 `);
   process.exit(0);
@@ -30,4 +32,5 @@ if (values.help) {
 process.env.WIFIROOM_PORT = values.port;
 process.env.WIFIROOM_SHARE = values.share ? '1' : '0';
 process.env.WIFIROOM_OPEN = values['no-open'] ? '0' : '1';
+process.env.WIFIROOM_PASSIVE = values.passive ? '1' : '0';
 await import(positionals[0] === 'mcp' ? '../mcp.js' : '../server.js');

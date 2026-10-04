@@ -22,6 +22,8 @@ import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeS
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
 const SHARE = process.env.WIFIROOM_SHARE === '1';
+const PASSIVE = process.env.WIFIROOM_PASSIVE === '1'; // --passive: only listen, never ping the network
+const SWEEP_EVERY_MS = 15 * 60_000;
 const HOST = SHARE ? '0.0.0.0' : '127.0.0.1';
 const PKG_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WIFIROOM_DATA || path.join(os.homedir(), '.wifiroom');
@@ -284,6 +286,14 @@ io.on('connection', async (socket) => {
 
   socket.on('timeline', (ack) => host && ack?.(db.data.events.slice(-100).reverse()));
 
+  // Ping every address on the subnet once so quiet devices show up (host only).
+  socket.on('scan', async (...args) => {
+    const ack = args.find((a) => typeof a === 'function'); // called with or without a payload
+    if (!host) return ack?.({ ok: false });
+    const found = await sweep();
+    ack?.({ ok: true, devices: devices.size, pinged: found });
+  });
+
   // Device control (host only): play a link, volume, pause/resume/stop, wake. Offline devices can be woken by id.
   socket.on('action', async ({ id, action, args } = {}, ack) => {
     if (!host || !allow('action', 500)) return ack?.({ ok: false, error: 'Not allowed' });
@@ -356,6 +366,29 @@ server.listen(PORT, HOST, () => {
   console.log(`  💾 Your labels are saved in ${DATA_DIR}\n`);
   if (process.env.WIFIROOM_OPEN === '1') import('open').then(({ default: open }) => open(`http://localhost:${PORT}`)).catch(() => {});
 });
+// Reading the ARP table only shows devices this computer recently talked to. A gentle sweep (one ping per
+// address, in small batches) fills it in so quiet devices like TVs and speakers appear too.
+let sweeping = null;
+function sweep() {
+  sweeping ??= (async () => {
+    const me = selfIp();
+    if (!me) return 0;
+    const base = me.split('.').slice(0, 3).join('.');
+    const ips = Array.from({ length: 254 }, (_, i) => `${base}.${i + 1}`).filter((ip) => ip !== me);
+    let alive = 0;
+    io.emit('scan', 'started');
+    for (let i = 0; i < ips.length; i += 32) {
+      const results = await Promise.all(ips.slice(i, i + 32).map((ip) => ping.promise.probe(ip, { timeout: 1 }).catch(() => ({ alive: false }))));
+      alive += results.filter((r) => r.alive).length;
+    }
+    await refresh();
+    io.emit('scan', 'done');
+    return alive;
+  })().finally(() => { sweeping = null; });
+  return sweeping;
+}
+
 refresh();
 setInterval(refresh, POLL_MS);
+if (!PASSIVE) { sweep(); setInterval(sweep, SWEEP_EVERY_MS); }
 startBle();
