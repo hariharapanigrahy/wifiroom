@@ -472,7 +472,7 @@ function startShortUrl() {
   bonjour.publish({ name: 'WiFiRoom', type: 'http', port: PORT, host: 'wifiroom.local' });
   const redirect = http.createServer((req, res) => { res.writeHead(302, { location: joinUrlOf() }); res.end(); });
   redirect.on('error', () => {});
-  redirect.listen(80, HOST, () => console.log(`     Short address: http://wifiroom.local or http://${selfIp()}`));
+  redirect.listen(80, HOST, () => console.log(`     Short address: http://${selfIp()} (iPhones and laptops can also use http://wifiroom.local; most Android phones can't)`));
 }
 
 server.on('error', (err) => {

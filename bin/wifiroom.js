@@ -39,7 +39,7 @@ if (values.help) {
 
     <device> is a name, part of a name, or an id from \`wifiroom devices\` or \`wifiroom home\`.
 
-    --share       Let anyone on your Wi-Fi join the room at http://wifiroom.local
+    --share       Let anyone on your Wi-Fi join the room at this computer's IP
     --code        With --share, also require a 6-digit code to join
     --port <n>    Port to use (default 4321)
     --no-open     Don't open the browser automatically
