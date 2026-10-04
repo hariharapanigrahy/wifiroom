@@ -18,6 +18,8 @@ WiFiRoom runs locally on your computer, and nothing leaves your network. It neve
 - **👉 Poke a device** to check it's alive. It sends a real ping, and the character hops with the reply time.
 - **📲 Hang out on the same Wi-Fi.** Start with `--share` and friends scan a QR code to join from any phone (Android, iPhone, laptop). No app, account or internet needed. Chat, send emoji, and drop YouTube or Instagram links straight onto someone's screen.
 - **📡 Bluetooth radar** *(experimental)*. See Bluetooth devices around you at their rough distance.
+- **📺 Share your screen to the TV.** One click on a Google Cast or DLNA TV (AirPlay on macOS is experimental).
+- **🏡 Run your home.** Turn lights and plugs on and off, dim them, change colors, set the AC, look at cameras. Works with Kasa, Hue, Shelly, LIFX, ONVIF cameras, and anything in Home Assistant.
 
 ## Usage
 
@@ -45,13 +47,43 @@ WiFiRoom detects what each device announces on your Wi-Fi and shows only the con
 | A real hardware address | PCs, NAS boxes, some TVs | **Wake** it with Wake-on-LAN, even after it's gone offline |
 | A phone that joined the room | Any phone with the page open | **🔔 Ring** it: loud beeps, vibration and a flashing screen |
 
+| Google Cast, DLNA or AirPlay TV | Smart TVs, Chromecast | **📺 Share my screen** (see below) |
+| A smart-home protocol (see below) | Plugs, bulbs, cameras | On/off, brightness, color, snapshot |
+
 YouTube on Cast devices uses YouTube's unofficial remote interface, which could stop working if YouTube changes it. DLNA can't play YouTube links, only direct media URLs.
+
+## Share your screen to the TV
+
+Click a TV in the room and press **📺 Share my screen**. WiFiRoom captures your screen with **ffmpeg** and asks the TV to play it.
+
+- **You need ffmpeg installed** (it isn't bundled): `brew install ffmpeg` on macOS, `winget install ffmpeg` on Windows, `sudo apt install ffmpeg` on Linux. WiFiRoom looks for it on your `PATH` and in `/opt/homebrew/bin`.
+- **Google Cast TVs** get a live HLS stream; **DLNA TVs** get a live MPEG-TS stream.
+- **It runs a few seconds behind** (typically 3–8 s, depending on the TV). Fine for showing photos, slides or a web page; not for games or typing along. Video only, no sound.
+- **How the TV reaches your computer:** while you share, WiFiRoom opens a second, tiny web server on your computer's Wi-Fi address (on a random port) that serves only the stream files, under a random, unguessable path that changes every time. It closes when you stop sharing. Your main WiFiRoom page stays limited to this computer unless you used `--share`. Anyone on your Wi-Fi who learned that link could watch while you share, so use it on networks you trust.
+- **macOS:** the first time, macOS asks for **Screen Recording** permission for the app you started WiFiRoom from (Terminal, iTerm, Claude…). Allow it in System Settings → Privacy & Security → Screen & System Audio Recording, then restart WiFiRoom. If your firewall is on, macOS may also ask whether `node` may accept incoming connections: allow it, or the TV can't fetch the stream.
+- **Linux:** needs an X11 session (Wayland isn't supported by ffmpeg's `x11grab`).
+- **AirPlay TVs on macOS** *(experimental)*: macOS has no public command for screen mirroring, so WiFiRoom clicks Control Center's **Screen Mirroring** menu for you with AppleScript and picks your TV by name. It needs **Accessibility** permission (System Settings → Privacy & Security → Accessibility) and may break whenever Apple changes that menu. You can always use Control Center yourself.
+
+## Run your home
+
+WiFiRoom finds these on your Wi-Fi by themselves and controls them locally, with no cloud accounts. Open **🏡 Home** for the full list, or click the device's character in the room.
+
+| Device | How | What you can do |
+|---|---|---|
+| TP-Link **Kasa** plugs, switches, bulbs | Local protocol | On/off, brightness, color (bulbs) |
+| Philips **Hue** | Your Hue bridge | On/off, brightness, color. The first time, press the bridge's button and click **Pair** |
+| **Shelly** relays, plugs, dimmers, shutters | Local HTTP API | On/off, brightness (dimmers), open/close |
+| **LIFX** bulbs | Local protocol | On/off, brightness, color |
+| **ONVIF** IP cameras | WS-Discovery | Snapshot. Add the camera login under 🏡 Home → ⚙️ Settings |
+| **Home Assistant** (anything it supports) | Your Home Assistant | Lights, switches, **air conditioners and thermostats** (set temperature), covers, cameras |
+
+**Home Assistant** is the catch-all for everything else (WiZ, Yeelight, Tuya, AC units…). In 🏡 Home → ⚙️ Settings, enter its address (e.g. `http://homeassistant.local:8123`) and a **long-lived access token** (Home Assistant → your profile → Security). The token is saved only on this computer, in `~/.wifiroom/home.json` (readable only by your user account), is never sent to a browser or to phones in the room, and is only used to talk to your own Home Assistant. Clear the address to disconnect.
 
 ## Use it from your AI (Claude, Cursor, ChatGPT)
 
 WiFiRoom works as an [MCP](https://modelcontextprotocol.io) server, so your own AI app can use your network as tools. It runs on the AI subscription you already have, with no API keys and no extra cost.
 
-> "What's on my Wi-Fi?" · "Is the printer online?" · "Play this video on the living room TV and set volume to 20" · "Wake my desktop" · "Ring Rahul's phone"
+> "What's on my Wi-Fi?" · "Is the printer online?" · "Play this video on the living room TV and set volume to 20" · "Wake my desktop" · "Ring Rahul's phone" · "Show my screen on the TV" · "Turn off the kitchen lights" · "Set the bedroom AC to 23" · "Show me the porch camera"
 
 **Claude Desktop:** add this to your config (Settings → Developer → Edit Config):
 
@@ -71,18 +103,20 @@ claude mcp add wifiroom -- npx -y github:hariharapanigrahy/wifiroom mcp
 
 **Cursor and others:** use the same command, `npx -y github:hariharapanigrahy/wifiroom mcp`.
 
-Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_device`, `ring_phone`, `send_link`, `say_in_room`, `who_was_home`. If WiFiRoom is already running, the MCP server connects to it; otherwise it starts one in the background.
+Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_device`, `ring_phone`, `send_link`, `say_in_room`, `who_was_home`, `screen_share`, `home_devices`, `home_control`, `camera_snapshot`. If WiFiRoom is already running, the MCP server connects to it; otherwise it starts one in the background.
 
 ## Privacy
 
 | | |
 |---|---|
-| Network scanning | **None.** WiFiRoom reads your computer's existing ARP table and listens for Bonjour/mDNS announcements |
+| Network scanning | **None.** WiFiRoom reads your computer's existing ARP table and listens for Bonjour/mDNS announcements. To find smart-home devices it also sends the standard "who's there?" broadcasts those devices are built to answer (SSDP, Kasa, LIFX, ONVIF WS-Discovery) |
 | Data leaving your network | **None** from WiFiRoom itself: no analytics, accounts or cloud. Playing a YouTube link asks your TV to load it from YouTube |
 | Where your labels live | `~/.wifiroom/db.json` on your computer |
 | What visitors see (with `--share`) | Names and characters only. Never IP addresses, MAC addresses, the timeline or Bluetooth data |
 | Poke | Sends one ping to the device you clicked |
 | Device control | Only when you (or your AI) ask, and only to the device you picked |
+| Screen sharing | Stays on your Wi-Fi: the TV fetches the stream straight from your computer, only while you share |
+| Home Assistant token | Stored only in `~/.wifiroom/home.json` (file mode 600); never sent to browsers or visitors |
 
 ## Honest limits
 
@@ -90,19 +124,28 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 - **Departures are slow.** Your computer remembers devices for up to ~20 minutes, so "left" lags behind reality.
 - **Bluetooth gives distance, not direction.** Distance is estimated from signal strength (±50%), and Bluetooth can't sense direction. Drag a blip to where the device really is.
 - **Messages only reach people who joined.** Nothing is pushed to a phone that hasn't opened the room in its browser.
+- **Screen sharing lags a few seconds and has no sound.** HLS and MPEG-TS are streaming formats, not live mirroring. Some DLNA TVs refuse live streams. AirPlay mirroring is experimental UI scripting.
+- **Smart-home drivers were written from each project's documentation and haven't all been tried on real hardware yet.** Home Assistant control was tested against a simulated Home Assistant; screen capture and the stream server were tested on macOS without a TV. Reports are very welcome.
+- **Newer Kasa firmware and Tapo devices** use an encrypted protocol that `tplink-smarthome-api` doesn't speak; add them to Home Assistant instead. Kasa power strips appear as one entry per outlet.
+- **Shelly devices with a password** (and Gen1 devices that only announce themselves weakly) may not show up or respond; Home Assistant covers them.
+- **WiZ and Yeelight** have no well-maintained, permissively licensed Node package, so they're supported through Home Assistant rather than directly.
+- **ONVIF snapshots** use the camera login you enter; cameras that only accept Digest authentication give you a link instead of a picture.
 
 ## Platforms
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Room, alerts, timeline, poke, sharing | ✅ tested | should work, untested | should work, untested |
+| Screen capture + stream server | ✅ tested (no TV yet) | should work (gdigrab), untested | should work on X11 (x11grab), untested |
+| AirPlay mirroring | experimental, untested on a TV | — | — |
+| Smart-home drivers | written from docs; Home Assistant tested against a simulator | same | same |
 | Bluetooth radar | ✅ (with Terminal permission) | should work, untested | should work, untested |
 
 Bug reports from Windows and Linux are very welcome.
 
 ## Built from
 
-WiFiRoom is glue between open-source packages. Every direct dependency is MIT licensed:
+WiFiRoom is glue between open-source packages. Every direct dependency is MIT licensed, except the two Apache-2.0 packages listed below:
 
 | Job | Package |
 |---|---|
@@ -121,13 +164,28 @@ WiFiRoom is glue between open-source packages. Every direct dependency is MIT li
 | Open browser | [open](https://github.com/sindresorhus/open) |
 | Pixel art | [Kenney Tiny Dungeon](https://kenney.nl/assets/tiny-dungeon) (CC0) |
 
-Transitive dependencies (the packages these pull in) also include other permissive licenses: ISC, BSD-2, BSD-3, Apache-2.0 and public domain. Most come from Express, qrcode, and the optional Bluetooth module's installer. See the full list with:
+Added for screen sharing and the smart home:
+
+| Job | Package | License | Downloads/week* | Last release |
+|---|---|---|---|---|
+| Kasa plugs and bulbs | [tplink-smarthome-api](https://github.com/plasticrake/tplink-smarthome-api) | MIT | ~1.9k | 2023 (5.0.0) |
+| Philips Hue | [node-hue-api](https://github.com/peter-murray/node-hue-api) | **Apache-2.0** | ~2.7k | 2023 (5.0.0-beta.16, npm's `latest` tag) |
+| LIFX bulbs | [lifx-lan-client](https://github.com/node-lifx/lifx-lan-client) | MIT | ~90 | 2025 (2.1.2) |
+| IP cameras (ONVIF) | [onvif](https://github.com/agsh/onvif) | MIT | ~18k | 2026 (0.8.3) |
+| Home Assistant | [home-assistant-js-websocket](https://github.com/home-assistant/home-assistant-js-websocket) (official) | **Apache-2.0** | ~29k | 2026 (9.7.0) |
+| WebSocket for Node 20 | [ws](https://github.com/websockets/ws) | MIT | ~330M | 2026 |
+| Screen capture | **ffmpeg, not bundled.** WiFiRoom runs the copy you installed; no ffmpeg code ships with WiFiRoom | — | — | — |
+| Shelly | none: Shelly's documented local HTTP API, called with `fetch` | — | — | — |
+
+\*Weekly npm downloads, checked October 2026.
+
+Transitive dependencies (the packages these pull in) also include other permissive licenses: ISC, BSD-2, BSD-3, Apache-2.0, BlueOak-1.0.0 and public domain. None are GPL or AGPL. Most come from Express, qrcode, and the optional Bluetooth module's installer. See the full list with:
 
 ```bash
 npx license-checker-rseidelsohn --production --summary
 ```
 
-`npm audit` reports one advisory, in `braces`, which is used only by `patch-package` during the optional Bluetooth module's install. It isn't used at runtime, and no fixed version exists.
+`npm audit` reports advisories in packages WiFiRoom already used before 0.3.0, none added by the new packages: `braces` (used only by `patch-package` while installing the optional Bluetooth module), `ip` (inside `node-ssdp`), and `protobufjs` (inside `castv2`, used to talk to Cast devices on your own network). None has a non-breaking fix yet.
 
 ## License
 
