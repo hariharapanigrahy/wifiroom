@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { homeAt, homeAction, HOME_ACTIONS } from './home.js';
 import { startScreen, stopScreen, sharingTo, airplayMirror, airplaySharingTo, onScreenChange } from './screen.js';
 const require = createRequire(import.meta.url);
-const { Client: CastClient, DefaultMediaReceiver } = require('castv2-client');
+const { Client: CastClient, DefaultMediaReceiver, Application: CastApp, JsonController } = require('castv2-client');
+const { inherits } = require('node:util');
 const { Client: SsdpClient } = require('node-ssdp');
 const MediaRendererClient = require('upnp-mediarenderer-client');
 const wol = require('wake_on_lan');
@@ -29,7 +30,8 @@ const guessType = (url) => (/\.(mp3|m4a|aac|flac|wav|ogg)(\?|$)/i.test(url) ? 'a
 function withCast(ip, fn) {
   return new Promise((resolve, reject) => {
     const client = new CastClient();
-    const done = (err, val) => { client.close(); err ? reject(err) : resolve(val); };
+    let finished = false;
+    const done = (err, val) => { if (finished) return; finished = true; client.close(); err ? reject(err) : resolve(val); };
     client.on('error', (err) => done(err));
     client.connect({ host: ip, port: casts.get(ip)?.port ?? 8009 }, () => fn(client, done));
   });
@@ -41,7 +43,13 @@ const cast = {
     if (vid) return castYoutube(ip, vid);
     return withCast(ip, (client, done) => client.launch(DefaultMediaReceiver, (err, player) => {
       if (err) return done(err);
-      player.load({ contentId: url, contentType: guessType(url), streamType: 'BUFFERED' }, { autoplay: true }, (e) => done(e, 'Playing'));
+      // load() answers while the TV is still fetching, so wait for it to start or fail (e.g. a dead link).
+      const timer = setTimeout(() => done(null, 'Playing'), 10000);
+      player.on('status', (st) => {
+        if (st.playerState === 'PLAYING' || st.playerState === 'PAUSED') { clearTimeout(timer); done(null, 'Playing'); }
+        if (st.idleReason === 'ERROR') { clearTimeout(timer); done(new Error("The TV couldn't play that link")); }
+      });
+      player.load({ contentId: url, contentType: guessType(url), streamType: 'BUFFERED' }, { autoplay: true }, (e) => { if (e) { clearTimeout(timer); done(e); } });
     }));
   },
   // Screen sharing: a live HLS stream served from this computer.
@@ -50,23 +58,41 @@ const cast = {
     player.load({ contentId: url, contentType: 'application/x-mpegURL', streamType: 'LIVE' }, { autoplay: true }, (e) => done(e, 'Sharing screen'));
   })),
   setVolume: (ip, level) => withCast(ip, (client, done) => client.setVolume({ level: Math.max(0, Math.min(1, level / 100)) }, (e) => done(e, `Volume ${level}%`))),
+  // Stops whatever app is showing, not just our own (client.stop() wants an app object and crashes on a session).
   stop: (ip) => withCast(ip, (client, done) => client.getSessions((err, sessions) => {
     if (err || !sessions?.length) return done(err, 'Nothing playing');
-    client.stop(sessions[0], (e) => done(e, 'Stopped'));
+    client.receiver.stop(sessions[0].sessionId, (e) => done(e, 'Stopped'));
   })),
+  pause: (ip) => castMedia(ip, 'pause', 'Paused'),
+  resume: (ip) => castMedia(ip, 'play', 'Playing'),
 };
 
-// YouTube on Cast devices: DIAL gives the TV's YouTube screen id, youtube-remote plays the video.
+// Pause/resume whatever media the TV is playing (YouTube, our own player, other apps that use Cast media).
+const castMedia = (ip, command, message) => withCast(ip, (client, done) => client.getSessions((err, sessions) => {
+  const session = sessions?.find((s) => s.namespaces?.some((n) => n.name === 'urn:x-cast:com.google.cast.media'));
+  if (err || !session) return done(err, 'Nothing playing');
+  client.join(session, DefaultMediaReceiver, (e, player) => {
+    if (e) return done(e);
+    player.getStatus((e2, status) => (e2 || !status ? done(e2, 'Nothing playing') : player[command]((e3) => done(e3, message))));
+  });
+}));
+
+// YouTube on Cast devices: the TV's YouTube app tells us its screen id, youtube-remote plays the video.
 // This uses YouTube's unofficial remote interface and may break if YouTube changes it.
+function CastYoutube(client, session) {
+  CastApp.apply(this, arguments);
+  this.mdx = this.createController(JsonController, 'urn:x-cast:com.google.youtube.mdx');
+}
+inherits(CastYoutube, CastApp);
+CastYoutube.APP_ID = '233637DE';
+
 async function castYoutube(ip, videoId) {
-  await fetch(`http://${ip}:8008/apps/YouTube`, { method: 'POST', signal: AbortSignal.timeout(5000) }).catch(() => {});
-  let screenId;
-  for (let i = 0; i < 8 && !screenId; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    const xml = await fetch(`http://${ip}:8008/apps/YouTube`, { signal: AbortSignal.timeout(4000) }).then((r) => r.text()).catch(() => '');
-    screenId = xml.match(/<screenId>([^<]+)<\/screenId>/)?.[1];
-  }
-  if (!screenId) throw new Error('The TV did not open YouTube');
+  const screenId = await withCast(ip, (client, done) => client.launch(CastYoutube, (err, app) => {
+    if (err) return done(err);
+    const timer = setTimeout(() => done(new Error('The TV did not open YouTube')), 15000);
+    app.mdx.on('message', (msg) => { if (msg?.data?.screenId) { clearTimeout(timer); done(null, msg.data.screenId); } });
+    app.mdx.send({ type: 'getMdxSessionStatus' });
+  }));
   await new Promise((resolve, reject) => new YoutubeRemote(screenId).playVideo(videoId, (err) => (err ? reject(err) : resolve())));
   return 'Playing on YouTube';
 }

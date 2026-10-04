@@ -42,7 +42,7 @@ WiFiRoom detects what each device announces on your Wi-Fi and shows only the con
 
 | Device announces | Usually | What you can do |
 |---|---|---|
-| Google Cast | Google TV / Android TV (Sony, TCL, Mi, OnePlus, Hisense, Philips…), Chromecast, Nest speakers | Play YouTube links and video/music URLs, volume, stop |
+| Google Cast | Google TV / Android TV (Sony, TCL, Mi, OnePlus, Hisense, Philips…), Chromecast, Nest speakers | Play YouTube links and video/music URLs, pause/resume/stop, volume |
 | DLNA media renderer | Most smart TVs and many speakers | Play video/music URLs, pause/resume/stop, volume |
 | A real hardware address | PCs, NAS boxes, some TVs | **Wake** it with Wake-on-LAN, even after it's gone offline |
 | A phone that joined the room | Any phone with the page open | **🔔 Ring** it: loud beeps, vibration and a flashing screen |
@@ -79,6 +79,48 @@ WiFiRoom finds these on your Wi-Fi by themselves and controls them locally, with
 
 **Home Assistant** is the catch-all for everything else (WiZ, Yeelight, Tuya, AC units…). In 🏡 Home → ⚙️ Settings, enter its address (e.g. `http://homeassistant.local:8123`) and a **long-lived access token** (Home Assistant → your profile → Security). The token is saved only on this computer, in `~/.wifiroom/home.json` (readable only by your user account), is never sent to a browser or to phones in the room, and is only used to talk to your own Home Assistant. Clear the address to disconnect.
 
+## Use it from scripts
+
+Run WiFiRoom in the background, then control devices by name from your terminal, a shell script or cron:
+
+```bash
+npx wifiroom serve                                  # no browser; keep it running
+npx wifiroom devices                                # what's here and what each can do
+npx wifiroom play "living room" https://youtu.be/dQw4w9WgXcQ
+npx wifiroom volume "living room" 20
+npx wifiroom screen "living room" start
+npx wifiroom wake desktop                           # works even if it's offline now
+npx wifiroom home "desk lamp" brightness 40
+npx wifiroom poke printer || echo "printer is down"
+npx wifiroom history --json
+```
+
+A device can be its nickname, part of its name, or an id from `wifiroom devices` (or `wifiroom home` for smart-home devices). Commands exit with status 1 and an error on stderr when something fails, and `--json` prints machine-readable output.
+
+The same commands are a local HTTP API at `http://localhost:4321/api`, for any language:
+
+| Request | Body | Does |
+|---|---|---|
+| `GET /api/devices` | | List devices here now, with `caps` |
+| `GET /api/known` | | Devices seen before with a real hardware address (wakeable) |
+| `GET /api/timeline` | | Recent arrivals and departures, newest first |
+| `POST /api/scan` | | Ping the network once, then list devices |
+| `POST /api/devices/<device>/play` | `{"url": "..."}` | Play a YouTube link or media URL |
+| `POST /api/devices/<device>/volume` | `{"level": 20}` | Set volume 0-100 |
+| `POST /api/devices/<device>/pause` · `resume` · `stop` | | Control playback |
+| `POST /api/devices/<device>/screen_start` · `screen_stop` | | Share this computer's screen |
+| `POST /api/devices/<device>/wake` | | Wake-on-LAN |
+| `POST /api/devices/<device>/poke` | | Ping; returns `alive` and `ms` |
+| `POST /api/devices/<device>/ring` | | Ring a phone that has the room open |
+| `GET /api/home` | | List smart-home devices |
+| `POST /api/home/<device>/<action>` | `{"value": ...}` | `turn_on`, `turn_off`, `toggle`, `set_brightness`, `set_color`, `set_temperature`, `snapshot` |
+
+```bash
+curl -X POST localhost:4321/api/devices/living%20room/volume -H 'content-type: application/json' -d '{"level": 20}'
+```
+
+The API only answers requests from this computer, even with `--share`, and refuses requests from web pages open in your browser.
+
 ## Use it from your AI (Claude, Cursor, ChatGPT)
 
 WiFiRoom works as an [MCP](https://modelcontextprotocol.io) server, so your own AI app can use your network as tools. It runs on the AI subscription you already have, with no API keys and no extra cost.
@@ -114,7 +156,8 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 | Where your labels live | `~/.wifiroom/db.json` on your computer |
 | What visitors see (with `--share`) | Names and characters only. Never IP addresses, MAC addresses, the timeline or Bluetooth data |
 | Poke | Sends one ping to the device you clicked |
-| Device control | Only when you (or your AI) ask, and only to the device you picked |
+| Device control | Only when you (or your AI or scripts) ask, and only to the device you picked |
+| Local API | Answers only this computer, never other devices on your Wi-Fi or web pages in your browser |
 | Screen sharing | Stays on your Wi-Fi: the TV fetches the stream straight from your computer, only while you share |
 | Home Assistant token | Stored only in `~/.wifiroom/home.json` (file mode 600); never sent to browsers or visitors |
 

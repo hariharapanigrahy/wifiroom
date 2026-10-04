@@ -14,7 +14,8 @@
     "drivers.js",
     "home.js",
     "screen.js",
-    "mcp.js"
+    "mcp.js",
+    "cli.js"
   ],
   "scripts": {
     "start": "node bin/wifiroom.js"

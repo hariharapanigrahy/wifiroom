@@ -17,7 +17,7 @@ import ping from 'ping';
 import QRCode from 'qrcode';
 import { JSONFilePreset } from 'lowdb/node';
 import { startDrivers, capabilitiesOf, castName, runAction, screenTarget } from './drivers.js';
-import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeSettings } from './home.js';
+import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeSettings, HOME_ACTIONS } from './home.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -163,8 +163,126 @@ function startBle() {
   });
 }
 
-// ---- sockets ----
+// ---- shared device commands (used by the room's sockets and the local HTTP API) ----
+const selfDevice = () => [...devices.values()].find((d) => d.isSelf);
+
+// Devices seen before with a real hardware address, including ones that are offline now (for wake).
+const knownDevices = () => Object.entries(db.data.labels).filter(([, l]) => l.mac).map(([id, l]) => ({ id, name: l.nickname || l.lastName, mac: l.mac, online: devices.has(id) }));
+
+// Find an item by id or (part of) its name. Throws a helpful error when nothing or several match.
+function pickByName(pool, query) {
+  const q = String(query).toLowerCase();
+  const exact = pool.filter((d) => d.id === q || d.name?.toLowerCase() === q);
+  const matches = exact.length ? exact : pool.filter((d) => d.name?.toLowerCase().includes(q));
+  if (matches.length === 1) return { id: matches[0].id, name: matches[0].name };
+  throw new Error(matches.length ? `"${query}" matches several devices: ${matches.map((m) => `${m.name} (id ${m.id})`).join(', ')}. Use the id.` : `No device called "${query}"`);
+}
+
+// `includeKnown` adds offline devices remembered for wake.
+function resolveDevice(query, { includeKnown = false } = {}) {
+  const pool = [...devices.values()].map((d) => ({ id: d.id, name: nameOf(d) }));
+  if (includeKnown) for (const k of knownDevices()) if (!devices.has(k.id)) pool.push({ id: k.id, name: k.name });
+  return pickByName(pool, query);
+}
+
+async function pokeDevice(from, to) {
+  const target = devices.get(to);
+  if (!target) throw new Error('Unknown device');
+  io.to(`dev:${to}`).emit('poked-you', { from: nameOf(from) });
+  const res = await ping.promise.probe(target.ip, { timeout: 2 });
+  const result = { from: from.id, to, alive: res.alive, ms: res.alive ? Math.round(Number(res.time)) : null };
+  io.emit('poked', result);
+  return result;
+}
+
+// Offline devices can be woken by id.
+async function controlDevice(id, action, args) {
+  const d = devices.get(id) ?? (db.data.labels[id]?.mac ? { id, ip: db.data.labels[id].lastIp, mac: db.data.labels[id].mac } : null);
+  if (!d) throw new Error('Unknown device');
+  const message = await runAction(d, action, args);
+  if (devices.has(id)) io.emit('bubble', { id, text: `🎛️ ${message}` });
+  return message;
+}
+
+// Ring a phone that has the room open: loud sound, vibration and a flashing screen.
+function ringDevice(from, to) {
+  if (!devices.has(to)) throw new Error('Unknown device');
+  if (!visitorsOf(to)) throw new Error("That device hasn't joined the room");
+  io.to(`dev:${to}`).emit('ring', { from: nameOf(from) });
+}
+
 const isHostAddr = (addr) => ['127.0.0.1', '::1', selfIp()].includes(v4(addr));
+
+// ---- local HTTP API (for scripts and the `wifiroom <command>` CLI) ----
+// Only this computer may call it, even with --share. The Host and Origin checks stop web pages open
+// in your browser from calling it (DNS rebinding and cross-site requests).
+const api = express.Router();
+const localHosts = () => ['localhost', '127.0.0.1', '[::1]', selfIp()].map((h) => `${h}:${PORT}`);
+api.use((req, res, next) => {
+  const local = isHostAddr(req.socket.remoteAddress) && localHosts().includes(req.headers.host);
+  const origin = req.headers.origin;
+  if (!local || (origin && !localHosts().some((h) => origin === `http://${h}`))) return res.status(403).json({ ok: false, error: 'The API only accepts requests from this computer' });
+  next();
+});
+api.use(express.json());
+
+const deviceView = (d) => {
+  const { id, ip, mac, randomMac, vendor, status, zone, nickname, bonjourName, caps, visitors, isSelf } = d;
+  return { id, name: nameOf(d), status, zone, ip, mac: randomMac ? null : mac, maker: randomMac ? null : vendor, privateAddress: randomMac, nickname: nickname || null, bonjourName: bonjourName || null, isSelf, joinedRoom: visitors > 0, caps };
+};
+const DEVICE_ACTIONS = ['play', 'pause', 'resume', 'stop', 'volume', 'wake', 'screen_start', 'screen_stop'];
+
+api.get('/devices', (req, res) => res.json(snapshot(true).map(deviceView)));
+api.get('/known', (req, res) => res.json(knownDevices()));
+api.get('/timeline', (req, res) => res.json(db.data.events.slice(-100).reverse()));
+api.get('/home', (req, res) => res.json(homeList()));
+
+api.post('/scan', async (req, res) => {
+  const pinged = await sweep();
+  res.json({ ok: true, pinged, devices: snapshot(true).map(deviceView) });
+});
+
+// POST /api/devices/<name or id>/<action>, e.g. /api/devices/living%20room/play with {"url": "..."}
+api.post('/devices/:device/:action', async (req, res) => {
+  const { action } = req.params, body = req.body ?? {};
+  try {
+    const d = resolveDevice(req.params.device, { includeKnown: action === 'wake' });
+    if (action === 'poke') {
+      const r = await pokeDevice(selfDevice() ?? { id: null }, d.id);
+      return res.json({ ok: true, device: d, alive: r.alive, ms: r.ms });
+    }
+    if (action === 'ring') {
+      ringDevice(selfDevice() ?? { id: null }, d.id);
+      return res.json({ ok: true, device: d, message: 'Ringing' });
+    }
+    if (!DEVICE_ACTIONS.includes(action)) return res.status(404).json({ ok: false, error: `Unknown action "${action}"` });
+    if (action === 'play' && !body.url) return res.status(400).json({ ok: false, error: 'Missing "url"' });
+    const level = typeof body.level === 'number' || (typeof body.level === 'string' && body.level.trim()) ? Number(body.level) : NaN;
+    if (action === 'volume' && !(level >= 0 && level <= 100)) return res.status(400).json({ ok: false, error: '"level" must be 0-100' });
+    res.json({ ok: true, device: d, message: await controlDevice(d.id, action, body) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/home/<name or id>/<action> with optional {"value": ...}: turn_on, turn_off, toggle,
+// set_brightness, set_color, set_temperature, snapshot.
+api.post('/home/:device/:action', async (req, res) => {
+  const { action } = req.params;
+  try {
+    if (!HOME_ACTIONS.includes(action) || action === 'pair') return res.status(404).json({ ok: false, error: `Unknown action "${action}"` });
+    const e = pickByName(homeList(), req.params.device);
+    const result = await homeAction(e.id, action, req.body?.value);
+    res.json(typeof result === 'string' ? { ok: true, device: e, message: result } : { ok: true, device: e, ...result });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+api.use((req, res) => res.status(404).json({ ok: false, error: `No such API route: ${req.method} ${req.path}` }));
+api.use((err, req, res, next) => res.status(err.status ?? 500).json({ ok: false, error: err.type === 'entity.parse.failed' ? 'Body is not valid JSON' : err.message }));
+app.use('/api', api);
+
+// ---- sockets ----
 
 io.use((socket, next) => {
   socket.data.host = isHostAddr(socket.handshake.address);
@@ -192,7 +310,7 @@ io.on('connection', async (socket) => {
   const allow = (key, ms) => { const now = Date.now(); if (now - (last[key] ?? 0) < ms) return false; last[key] = now; return true; };
 
   // Who is acting: the host acts as this laptop; a visitor acts as the device their browser runs on.
-  const actor = () => (host ? [...devices.values()].find((d) => d.isSelf) : devices.get(socket.data.deviceId));
+  const actor = () => (host ? selfDevice() : devices.get(socket.data.deviceId));
 
   socket.on('join', async ({ name } = {}) => {
     if (host || !allow('join', 2000)) return;
@@ -233,13 +351,9 @@ io.on('connection', async (socket) => {
   });
 
   socket.on('poke', async ({ to } = {}, ack) => {
-    const d = actor(), target = devices.get(to);
-    if (!d || !target || !allow('poke', 2000)) return;
-    io.to(`dev:${to}`).emit('poked-you', { from: nameOf(d) });
-    const res = await ping.promise.probe(target.ip, { timeout: 2 });
-    const result = { from: d.id, to, alive: res.alive, ms: res.alive ? Math.round(Number(res.time)) : null };
-    io.emit('poked', result);
-    ack?.(result);
+    const d = actor();
+    if (!d || !devices.has(to) || !allow('poke', 2000)) return;
+    ack?.(await pokeDevice(d, to));
   });
 
   socket.on('share', ({ to, url } = {}, ack) => {
@@ -294,15 +408,11 @@ io.on('connection', async (socket) => {
     ack?.({ ok: true, devices: devices.size, pinged: found });
   });
 
-  // Device control (host only): play a link, volume, pause/resume/stop, wake. Offline devices can be woken by id.
+  // Device control (host only): play a link, volume, pause/resume/stop, screen, wake.
   socket.on('action', async ({ id, action, args } = {}, ack) => {
     if (!host || !allow('action', 500)) return ack?.({ ok: false, error: 'Not allowed' });
-    const d = devices.get(id) ?? (db.data.labels[id]?.mac ? { id, ip: db.data.labels[id].lastIp, mac: db.data.labels[id].mac } : null);
-    if (!d) return ack?.({ ok: false, error: 'Unknown device' });
     try {
-      const message = await runAction(d, action, args);
-      if (devices.has(id)) io.emit('bubble', { id, text: `🎛️ ${message}` });
-      ack?.({ ok: true, message });
+      ack?.({ ok: true, message: await controlDevice(id, action, args) });
     } catch (err) {
       ack?.({ ok: false, error: err.message });
     }
@@ -326,16 +436,17 @@ io.on('connection', async (socket) => {
     try { ack?.({ ok: true, ...(await saveHomeSettings(values)) }); } catch (err) { ack?.({ ok: false, error: err.message }); }
   });
 
-  // Devices seen before with a real hardware address, including ones that are offline now (for wake).
-  socket.on('known', (ack) => host && ack?.(Object.entries(db.data.labels).filter(([, l]) => l.mac).map(([id, l]) => ({ id, name: l.nickname || l.lastName, mac: l.mac, online: devices.has(id) }))));
+  socket.on('known', (ack) => host && ack?.(knownDevices()));
 
-  // Ring a phone that has the room open: loud sound, vibration and a flashing screen.
   socket.on('ring', ({ to } = {}, ack) => {
-    const d = actor(), target = devices.get(to);
-    if (!d || !target || !allow('ring', 5000)) return ack?.({ ok: false, error: "Can't ring right now" });
-    const delivered = visitorsOf(to) > 0;
-    io.to(`dev:${to}`).emit('ring', { from: nameOf(d) });
-    ack?.({ ok: delivered, error: delivered ? undefined : "That device hasn't joined the room" });
+    const d = actor();
+    if (!d || !allow('ring', 5000)) return ack?.({ ok: false, error: "Can't ring right now" });
+    try {
+      ringDevice(d, to);
+      ack?.({ ok: true });
+    } catch (err) {
+      ack?.({ ok: false, error: err.message });
+    }
   });
 });
 

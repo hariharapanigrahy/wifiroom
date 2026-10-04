@@ -309,7 +309,7 @@ function controlSection(d, caps) {
     const vol = el('input', { type: 'range', min: 0, max: 100, value: 30, style: 'margin-top:6px' });
     vol.onchange = () => act('volume', { level: Number(vol.value) });
     out.push(el('div', { className: 'row', style: 'margin-top:6px' },
-      ...(caps.includes('dlna') ? [btn('⏸', () => act('pause'), 'ghost'), btn('▶', () => act('resume'), 'ghost')] : []),
+      ...(caps.includes('cast') || caps.includes('dlna') ? [btn('⏸', () => act('pause'), 'ghost'), btn('▶', () => act('resume'), 'ghost')] : []),
       btn('⏹ Stop', () => act('stop'), 'ghost')), vol);
   }
   if (caps.includes('screen')) {
