@@ -440,7 +440,7 @@ socket.on('hello', (h) => {
   document.body.classList.toggle('host', h.host);
   if (h.host) {
     document.body.classList.add('in-room');
-    $('qr').src = h.qr; $('code').textContent = h.code; $('join-url').textContent = h.joinUrl;
+    $('qr').src = h.qr; $('code').textContent = h.code ?? ''; $('join-url').textContent = h.joinUrl;
     $('lan-warn').style.display = h.lanShared ? 'none' : '';
     $('hint').textContent = 'Click a character to interact · drag to trust · tap the floor to walk · 📡 Radar shows Bluetooth devices nearby';
   } else if (!state.you) {

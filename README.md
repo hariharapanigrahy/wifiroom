@@ -25,14 +25,14 @@ WiFiRoom runs locally on your computer, and nothing leaves your network. It neve
 
 ```bash
 npx wifiroom              # just you
-npx wifiroom --share      # let people on your Wi-Fi join with a code
+npx wifiroom --share      # let people on your Wi-Fi join at http://wifiroom.local
 npx wifiroom --port 5000  # use another port
 npx wifiroom --help
 ```
 
 Requires [Node.js](https://nodejs.org) 20 or newer.
 
-**Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi who has the 6-digit code (new every start) can join. Only use `--share` on networks you trust.
+**Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi can join by opening `http://wifiroom.local` or your computer's IP address, no code needed. They can chat, send links and ring phones in the room, but device controls, IP and hardware addresses and the API stay on your computer. Add `--code` to also require a 6-digit code (new every start), and only use `--share` on networks you trust.
 
 **Bluetooth on macOS:** run it from Terminal (or iTerm) and click **Allow** when macOS asks. Without permission, everything else still works.
 

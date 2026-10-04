@@ -28,7 +28,9 @@ const HOST = SHARE ? '0.0.0.0' : '127.0.0.1';
 const PKG_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.WIFIROOM_DATA || path.join(os.homedir(), '.wifiroom');
 const PHASER_DIST = path.join(path.dirname(createRequire(import.meta.url).resolve('phaser/package.json')), 'dist');
-const CODE = String(randomInt(100000, 1000000)); // visitors need this; new every start
+// With --code, visitors need this 6-digit code (new every start). Otherwise anyone on the Wi-Fi can walk in.
+const REQUIRE_CODE = process.env.WIFIROOM_CODE === '1';
+const CODE = String(randomInt(100000, 1000000));
 const POLL_MS = 10_000;
 const SLEEP_AFTER_MS = 15_000;  // missing from ARP table -> asleep
 const LEAVE_AFTER_MS = 120_000; // missing this long -> walks out
@@ -286,17 +288,17 @@ app.use('/api', api);
 
 io.use((socket, next) => {
   socket.data.host = isHostAddr(socket.handshake.address);
-  if (socket.data.host || socket.handshake.auth?.code === CODE) return next();
+  if (socket.data.host || !REQUIRE_CODE || socket.handshake.auth?.code === CODE) return next();
   next(new Error('bad-code'));
 });
 
 io.on('connection', async (socket) => {
   const host = socket.data.host;
   if (host) socket.join('host');
-  const joinUrl = `http://${selfIp()}:${PORT}/?code=${CODE}`;
+  const joinUrl = joinUrlOf();
   socket.emit('hello', {
     host, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',
-    ...(host && { code: CODE, joinUrl, qr: await QRCode.toDataURL(joinUrl, { margin: 1, width: 240 }) }),
+    ...(host && { code: REQUIRE_CODE ? CODE : null, joinUrl, qr: await QRCode.toDataURL(joinUrl, { margin: 1, width: 240 }) }),
   });
   socket.emit('devices', snapshot(host));
   if (host) {
@@ -462,6 +464,17 @@ if (busy) {
   process.exit(1);
 }
 
+const joinUrlOf = () => `http://${selfIp()}:${PORT}/${REQUIRE_CODE ? `?code=${CODE}` : ''}`;
+
+// Easy addresses for phones: http://wifiroom.local and plain http://<this computer's IP> (port 80) both
+// redirect into the room. Best-effort: skipped quietly if port 80 is taken or not allowed.
+function startShortUrl() {
+  bonjour.publish({ name: 'WiFiRoom', type: 'http', port: PORT, host: 'wifiroom.local' });
+  const redirect = http.createServer((req, res) => { res.writeHead(302, { location: joinUrlOf() }); res.end(); });
+  redirect.on('error', () => {});
+  redirect.listen(80, HOST, () => console.log(`     Short address: http://wifiroom.local or http://${selfIp()}`));
+}
+
 server.on('error', (err) => {
   console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is busy. Try: npx wifiroom --port ${PORT + 1}` : err.message);
   process.exit(1);
@@ -469,8 +482,10 @@ server.on('error', (err) => {
 server.listen(PORT, HOST, () => {
   console.log(`\n  🏠 WiFiRoom is running at http://localhost:${PORT}`);
   if (SHARE) {
-    console.log(`  📲 Sharing on your Wi-Fi: http://${selfIp()}:${PORT}/?code=${CODE}`);
-    console.log('     Anyone on this network with the code can join. Use only on networks you trust.');
+    console.log(`  📲 Sharing on your Wi-Fi: ${joinUrlOf()}`);
+    console.log(REQUIRE_CODE ? '     Anyone on this network with the code can join. Use only on networks you trust.'
+      : '     Anyone on this Wi-Fi can join, no code needed (add --code to require one). Device controls stay on this computer.');
+    startShortUrl();
   } else {
     console.log('  🔒 Only this computer can open it. Add --share to let phones on your Wi-Fi join.');
   }
