@@ -271,7 +271,7 @@ function devicePanel(d) {
   if (!isMe && myId()) {
     out.push(h3('Interact'));
     out.push(el('div', { className: 'row' }, btn('👉 Poke', () => socket.emit('poke', { to: d.id })),
-      ...(d.chatKey ? [btn('💬 Private chat', () => openDm(d.id))] : []),
+      ...(d.chatKey || canInvite(d) ? [btn('💬 Private chat', () => (d.chatKey ? openDm(d.id) : toast(notHere(d))))] : []),
       ...(d.caps?.includes('ring') ? [btn('🔔 Ring', () => socket.emit('ring', { to: d.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`)))] : []),
       ...state.reactions.map((e) => btn(e, () => socket.emit('react', { to: d.id, emoji: e }), 'emoji'))));
     const link = el('input', { placeholder: 'Paste a YouTube / Instagram / any link', type: 'text', inputMode: 'url' });

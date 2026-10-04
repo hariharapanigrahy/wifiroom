@@ -36,6 +36,15 @@ const keyOf = (id) => state.devices.get(id)?.chatKey;
 const others = (chat) => chat.members.filter((m) => m !== myId());
 const chatName = (chat) => (chat.kind === 'dm' ? personName(others(chat)[0]) : chat.name || others(chat).map(personName).join(', '));
 const reachable = () => [...state.devices.values()].filter((d) => d.chatKey && d.id !== myId());
+// People you might want to chat with who don't have the room page open right now (named devices and phones).
+const canInvite = (d) => !d.isSelf && d.id !== myId() && (d.nickname || d.randomMac);
+const notReachable = () => [...state.devices.values()].filter((d) => !d.chatKey && canInvite(d));
+const roomAddress = () => view.joinUrl || location.origin;
+const notHere = (d) => `${nameOf(d)} needs the room open to chat. Ask them to open ${roomAddress()} on their phone.`;
+const waitingList = () => {
+  const list = notReachable();
+  return list.length ? [el('p', { className: 'note', textContent: `Not on the room page right now, so they can't get messages yet: ${list.map(nameOf).join(', ')}. Ask them to open ${roomAddress()} on their phone; they'll show up here once they do.` })] : [];
+};
 
 function addMsg(chat, msg, { unread = false } = {}) {
   chat.msgs.push(msg);
@@ -231,7 +240,7 @@ function renderChats() {
       saveChats();
       openChats(id);
     });
-    body.replaceChildren(name, ...(picks.length >= 2 ? picks : [el('p', { className: 'note', textContent: 'A group needs at least two other people who have joined the room.' })]), el('p', {}, create));
+    body.replaceChildren(name, ...picks, ...(picks.length >= 2 ? [] : [el('p', { className: 'note', textContent: `A group needs at least two other people with the room page open${picks.length ? ' (only one is here now)' : ''}.` })]), ...waitingList(), el('p', {}, create));
     return;
   }
   $('chats-title').textContent = '💬 Private chats';
@@ -247,7 +256,8 @@ function renderChats() {
   const start = people.filter((d) => !chats[dmId(myId(), d.id)]).map((d) => el('button', { className: 'chat-row', type: 'button', onclick: () => openDm(d.id) }, el('span', {}, '➕'), el('span', { className: 'who', textContent: nameOf(d) })));
   body.replaceChildren(...rows,
     h3('Start a private chat'),
-    ...(start.length ? start : [el('p', { className: 'note', textContent: people.length ? 'You already have a chat with everyone here.' : 'Nobody else has joined the room yet. Share the room\'s address so others can join from their phone.' })]),
+    ...(start.length ? start : [el('p', { className: 'note', textContent: people.length ? 'You already have a chat with everyone here.' : `Nobody else has the room page open yet. Others join by opening ${roomAddress()} on their phone.` })]),
+    ...waitingList(),
     el('p', {}, btn('👥 New group', () => { view.screen = 'new'; view.picked.clear(); renderChats(); }, 'ghost')));
 }
 
@@ -257,6 +267,11 @@ $('chats-form').onsubmit = (e) => { e.preventDefault(); send($('chats-text').val
 
 // Offer our key to the room (visitors send it with "join"; the host page has no join step) and keep the
 // chats screen in step with who is around.
-socket.on('hello', (h) => { if (h.host) socket.emit('chat-key', myChatKey()); });
+socket.on('hello', (h) => {
+  if (view.build && h.build && h.build !== view.build) return location.reload(); // the room was restarted with new code
+  view.build = h.build;
+  view.joinUrl = h.joinUrl;
+  if (h.host) socket.emit('chat-key', myChatKey());
+});
 socket.on('devices', () => { checkKeys(); renderChats(); });
 updateBadge();

@@ -33,6 +33,7 @@ const NACL_DIR = path.dirname(require.resolve('tweetnacl/package.json'));
 // With --code, visitors need this 6-digit code (new every start). Otherwise anyone on the Wi-Fi can walk in.
 const REQUIRE_CODE = process.env.WIFIROOM_CODE === '1';
 const CODE = String(randomInt(100000, 1000000));
+const BUILD = String(Date.now()); // pages open from before a restart reload, so they pick up new code
 const POLL_MS = 10_000;
 const SLEEP_AFTER_MS = 15_000;  // missing from ARP table -> asleep
 const LEAVE_AFTER_MS = 120_000; // missing this long -> walks out
@@ -309,7 +310,7 @@ io.on('connection', async (socket) => {
   if (host) socket.join('host');
   const joinUrl = joinUrlOf();
   socket.emit('hello', {
-    host, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',
+    host, build: BUILD, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',
     ...(host && { code: REQUIRE_CODE ? CODE : null, joinUrl, qr: await QRCode.toDataURL(joinUrl, { margin: 1, width: 240 }) }),
   });
   socket.emit('devices', snapshot(host));
