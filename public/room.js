@@ -28,7 +28,7 @@ const $ = (id) => document.getElementById(id);
 const hash = (s) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const isUnknown = (d) => !d.isSelf && d.zone !== 'trusted' && !d.nickname;
 const frameOf = (d) => (d.isSelf ? FRAMES.self : isUnknown(d) ? FRAMES.ghost : FRAMES.people[hash(d.id) % FRAMES.people.length]);
-const nameOf = (d) => d.nickname || d.bonjourName || (d.isSelf ? 'This laptop' : d.randomMac ? 'Mystery phone?' : (d.vendor || '').replace(/<unknown>/, 'Unknown'));
+const nameOf = (d) => d.nickname || d.bonjourName || (d.isSelf ? (state.platform === 'android' ? 'This phone' : 'This laptop') : d.randomMac ? 'Mystery phone?' : (d.vendor || '').replace(/<unknown>/, 'Unknown'));
 // Apps often copy "Check this out https://…"; pick out the link, and add https:// when it's missing.
 const linkIn = (text) => { const t = text.trim(); const m = t.match(/https?:\/\/\S+/i); return m ? m[0] : /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(t) ? `https://${t}` : t; };
 const myId = () => (state.host ? [...state.devices.values()].find((d) => d.isSelf)?.id : state.you);
@@ -354,6 +354,7 @@ function stopRing() {
 // ================= Socket events =================
 socket.on('hello', (h) => {
   state.host = h.host;
+  state.platform = h.platform;
   state.reactions = h.reactions;
   document.body.classList.toggle('host', h.host);
   if (h.host) {
