@@ -134,17 +134,131 @@ function Program() {
   </div>`;
 }
 
-// ---- People: everyone known to the host's channels, online first ----
+// ---- People: everyone known to the host, online first, and what you can do with each ----
+const deviceOf = (uid) => [...state.devices.values()].find((d) => d.uid === uid && d.chatKey); // their device, if they have the room open now
+function Person({ p }) {
+  const dev = p.id === me() ? null : deviceOf(p.id);
+  const channels = (window.ch?.list ?? []).filter((c) => c.joined && !c.members.includes(p.id) && !['general', 'announcements'].includes(c.id));
+  const dm = () => { openDm(dev.id); };
+  const call = async () => { openDm(dev.id); await new Promise((r) => setTimeout(r, 100)); startCall(chats[view.chatId]); };
+  return html`<div class="person">
+    <div class="chat-row"><span>${p.online ? '🟢' : '⚪'}</span>
+      <span class="who">${p.name}${p.id === me() ? ' (you)' : ''}${p.host ? html` <span class="pill">host</span>` : ''}<div>${p.online ? (dev ? 'in the room' : 'online') : `last seen ${new Date(p.seen).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}</div></span>
+      ${dev && html`<button class="ghost sm" onClick=${dm}>💬</button><button class="ghost sm" onClick=${call} title="Voice call">📞</button>`}
+      ${dev && dev.caps?.includes('ring') && html`<button class="ghost sm" title="Ring their phone" onClick=${() => socket.emit('ring', { to: dev.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`))}>🔔</button>`}
+      ${channels.length > 0 && p.id !== me() && html`<select class="sm" style="width:auto" onChange=${(e) => { if (e.target.value) { act('channel-invite', { id: e.target.value, who: p.id }); e.target.value = ''; } }}>
+        <option value="">＋ add to…</option>${channels.map((c) => html`<option value=${c.id}>${c.kind === 'public' ? '#' : '🔒'} ${c.name}</option>`)}</select>`}
+    </div></div>`;
+}
 function People() {
-  const people = Object.entries(window.ch?.people ?? {}).map(([id, p]) => ({ id, ...p })).sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
-  if (!people.length) return html`<${Empty} icon="👥"><p>Nobody has joined channels yet. Open Chats and pick a name.</p><//>`;
-  return html`<div>
-    <h3>${people.filter((p) => p.online).length} here now</h3>
-    ${people.map((p) => html`<div class="chat-row" key=${p.id}><span>${p.online ? '🟢' : '⚪'}</span><span class="who">${p.name}${p.id === me() ? ' (you)' : ''}${p.host ? ' · host' : ''}<div>${p.online ? 'online' : `last seen ${new Date(p.seen).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}</div></span></div>`)}
+  const people = Object.entries(window.ch?.people ?? {}).map(([id, p]) => ({ id, ...p })).sort((a, b) => (b.online - a.online) || (b.host - a.host) || a.name.localeCompare(b.name));
+  if (!me()) return html`<${NamePrompt} />`;
+  if (!people.length) return html`<${Empty} icon="👥"><p>Nobody has joined yet. Share the room's address or the Invite QR.</p><//>`;
+  const here = people.filter((p) => p.online), away = people.filter((p) => !p.online);
+  return html`<div class="program">
+    <h3>${here.length} here now</h3>${here.map((p) => html`<${Person} p=${p} key=${p.id} />`)}
+    ${away.length > 0 && html`<h3>Been here before</h3>${away.map((p) => html`<${Person} p=${p} key=${p.id} />`)}`}
+    <p class="note">💬 opens a private, end-to-end encrypted chat. 📞 calls them. People show up here once they've picked a name.</p>
   </div>`;
 }
 
-const Games = () => html`<${Empty} icon="🎲"><p><b>Games: coming next</b></p><p class="note">Buzzer quiz, bingo, "most likely to", and board games, with lobbies and a scoreboard per night.</p><//>`;
+// ---- Games: a scoreboard for the night and game sessions the host runs (games.js on the server) ----
+const games = { data: null, open: null };
+const gact = (id, action, data) => act('game-action', { id, action, data });
+const playerName = (g, uid) => g.players.find((p) => p.id === uid)?.name ?? 'Someone';
+
+function Scoreboard({ scores }) {
+  return html`<${Card} title="Scoreboard" right=${amHost() && scores.length > 0 && html`<button class="ghost sm" onClick=${() => confirm('Clear all scores for the night?') && act('score-adjust', {})}>Reset</button>`}>
+    ${!scores.length && html`<p class="note">No points yet. Points come from games, or the host adds them.</p>`}
+    ${scores.map((s, i) => html`<div class="item" key=${s.id}><div class="when">${['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`}</div><div class="what"><b>${s.name}</b></div><div class="row"><b>${s.points}</b>
+      ${amHost() && html`<button class="ghost sm" onClick=${() => act('score-adjust', { who: s.id, points: 1 })}>+1</button><button class="ghost sm" onClick=${() => act('score-adjust', { who: s.id, points: -1 })}>−1</button>`}</div></div>`)}
+  <//>`;
+}
+
+function NewGame({ types }) {
+  const [type, setType] = useState(types[0]?.type);
+  const [title, setTitle] = useState('');
+  return html`<${Card} title="Start a game">
+    <div class="row">
+      <select style="width:auto" value=${type} onChange=${(e) => setType(e.target.value)}>${types.map((t) => html`<option value=${t.type}>${t.icon} ${t.name}</option>`)}</select>
+      <input placeholder="Title (optional)" maxLength=${60} value=${title} onInput=${(e) => setTitle(e.target.value)} />
+      <button onClick=${async () => { const r = await act('game-create', { type, title }); if (r.ok) { setTitle(''); games.open = r.id; draw(); } }}>Start</button>
+    </div>
+    <p class="note">🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
+  <//>`;
+}
+
+function Quiz({ g }) {
+  const s = g.state, host = amHost(), mine = me();
+  const [q, setQ] = useState(''); const [opts, setOpts] = useState(''); const [ans, setAns] = useState(0); const [pts, setPts] = useState(3);
+  const live = s.buzzes.find((b) => !b.judged);
+  const buzzed = s.buzzes.some((b) => b.uid === mine);
+  const answered = s.answers[mine] !== undefined;
+  const results = s.phase === 'done' && s.options.length ? g.players.map((p) => ({ ...p, a: s.answers[p.id] })).filter((p) => p.a) : [];
+  return html`<div>
+    ${host && html`<div class="form">
+      <input placeholder=${`Question ${s.round + 1} (or ask it out loud and leave this empty)`} value=${q} maxLength=${200} onInput=${(e) => setQ(e.target.value)} />
+      <textarea rows="3" placeholder="Multiple choice? One option per line. Leave empty for buzzers." value=${opts} onInput=${(e) => setOpts(e.target.value)}></textarea>
+      <div class="row">${opts.trim() && html`<label class="note">Correct:</label><select style="width:auto" value=${ans} onChange=${(e) => setAns(Number(e.target.value))}>${opts.split('\n').filter((o) => o.trim()).map((o, i) => html`<option value=${i}>${o}</option>`)}</select>`}
+        <label class="note">Points:</label><select style="width:auto" value=${pts} onChange=${(e) => setPts(Number(e.target.value))}>${[1, 2, 3, 5, 10].map((n) => html`<option value=${n}>${n}</option>`)}</select>
+        <button onClick=${async () => { const r = await gact(g.id, 'ask', { question: q, options: opts.split('\n'), answer: ans, points: pts }); if (r.ok) { setQ(''); setOpts(''); } }}>${s.round ? 'Next question' : 'Ask'}</button></div>
+    </div>`}
+    ${s.phase === 'idle' ? html`<p class="note">${host ? 'Ask the first question.' : 'Waiting for the host to ask…'}</p>` : html`<div class="qbox">
+      <div class="note">Round ${s.round} · ${s.points} pts</div><h2 style="margin:4px 0 10px">${s.question}</h2>
+      ${s.options.length ? html`<div class="row">${s.options.map((o, i) => html`<button class=${s.phase === 'done' && i === s.answer ? '' : 'ghost'} disabled=${host || answered || s.phase !== 'open'} onClick=${() => gact(g.id, 'answer', { option: i })}>${s.answers[mine]?.option === i ? '✓ ' : ''}${o}</button>`)}</div>
+          ${!host && answered && s.phase === 'open' && html`<p class="note">Answer in. Waiting for the reveal…</p>`}
+          ${host && s.phase === 'open' && html`<p class="row"><span class="note">${Object.keys(s.answers).length} of ${g.players.length} answered</span><button onClick=${() => gact(g.id, 'reveal')}>Reveal</button></p>`}
+          ${results.length > 0 && html`<div class="note" style="margin-top:8px">${results.sort((a, b) => a.a.at - b.a.at).map((p) => `${p.a.option === s.answer ? '✅' : '❌'} ${p.name}`).join(' · ')}</div>`}`
+      : html`${!host && html`<button class="buzz" disabled=${buzzed || s.phase !== 'open'} onClick=${() => gact(g.id, 'buzz')}>${buzzed ? 'BUZZED' : 'BUZZ'}</button>`}
+          ${s.buzzes.map((b, i) => html`<div class="item" key=${b.uid}><div class="when">${i + 1}.</div><div class="what"><b>${playerName(g, b.uid)}</b> ${b.judged === 'right' ? '✅' : b.judged === 'wrong' ? '❌' : i === 0 || s.buzzes[i - 1].judged ? '👈 up' : ''}</div>
+            ${host && b === live && s.phase === 'open' && html`<div class="row"><button onClick=${() => gact(g.id, 'judge', { correct: true })}>✓ Right</button><button class="ghost" onClick=${() => gact(g.id, 'judge', { correct: false })}>✗ Wrong</button></div>`}</div>`)}
+          ${host && s.phase === 'open' && !s.buzzes.length && html`<p class="note">Waiting for a buzz…</p>`}
+          ${host && s.phase === 'open' && s.buzzes.length > 0 && !live && html`<p class="note">Everyone who buzzed was wrong. <button class="ghost sm" onClick=${() => gact(g.id, 'reveal')}>Close round</button></p>`}`}
+    </div>`}
+  </div>`;
+}
+
+function Likely({ g }) {
+  const s = g.state, host = amHost(), mine = me();
+  const [custom, setCustom] = useState('');
+  const tally = {}; for (const who of Object.values(s.votes)) tally[who] = (tally[who] ?? 0) + 1;
+  const top = Math.max(0, ...Object.values(tally));
+  return html`<div>
+    ${host && html`<div class="row" style="margin-bottom:8px"><input placeholder="Your own prompt (optional)" value=${custom} maxLength=${140} onInput=${(e) => setCustom(e.target.value)} /><button onClick=${async () => { const r = await gact(g.id, 'next', { prompt: custom }); if (r.ok) setCustom(''); }}>${s.round ? 'Next' : 'Start'}</button></div>`}
+    ${s.phase === 'idle' ? html`<p class="note">${host ? 'Start the first round.' : 'Waiting for the host…'}</p>` : html`<div class="qbox">
+      <div class="note">Round ${s.round}</div><h2 style="margin:4px 0 10px">Most likely to ${s.prompt}?</h2>
+      <div class="row">${g.players.map((p) => html`<button class=${s.votes[mine] === p.id ? '' : 'ghost'} disabled=${s.phase !== 'open'} onClick=${() => gact(g.id, 'vote', { who: p.id })}>${p.name}${s.phase === 'done' ? ` · ${tally[p.id] ?? 0}${tally[p.id] && tally[p.id] === top ? ' 🏆' : ''}` : ''}</button>`)}</div>
+      ${s.phase === 'open' && html`<p class="row"><span class="note">${Object.keys(s.votes).length} of ${g.players.length} voted</span>${host && html`<button onClick=${() => gact(g.id, 'reveal')}>Reveal</button>`}</p>`}
+    </div>`}
+  </div>`;
+}
+
+function GameView({ g }) {
+  const body = g.type === 'quiz' ? html`<${Quiz} g=${g} />` : html`<${Likely} g=${g} />`;
+  return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${amHost() && html`<button class="ghost sm" onClick=${() => confirm('End this game?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
+    ${!g.joined && !amHost() && html`<p><button onClick=${() => act('game-join', { id: g.id })}>Join this game</button></p>`}
+    ${(g.joined || amHost()) && body}
+    <p class="note">Playing: ${g.players.map((p) => p.name).join(', ') || 'nobody yet'}</p>
+  <//>`;
+}
+
+function Games() {
+  if (!me()) return html`<${NamePrompt} />`;
+  const d = games.data;
+  if (!d) return html`<${Empty} icon="🎲"><p>Loading…</p><//>`;
+  const open = d.games.find((g) => g.id === games.open && !g.ended);
+  if (open) return html`<div class="program"><${GameView} g=${open} /></div>`;
+  const live = d.games.filter((g) => !g.ended);
+  return html`<div class="program">
+    ${amHost() && html`<${NewGame} types=${d.types} />`}
+    <${Card} title="Games on now">
+      ${!live.length && html`<p class="note">${amHost() ? 'Start one above.' : 'Nothing yet. The host starts games.'}</p>`}
+      ${live.map((g) => html`<div class="item" key=${g.id}><div class="when">${g.icon}</div><div class="what"><b>${g.title}</b><div class="note">${g.name} · ${g.players.length} playing${g.joined ? ' · you\'re in' : ''}</div></div>
+        <button onClick=${async () => { if (!g.joined && !amHost()) await act('game-join', { id: g.id }); games.open = g.id; draw(); }}>${g.joined || amHost() ? 'Open' : 'Join'}</button></div>`)}
+    <//>
+    <${Scoreboard} scores=${d.scores} />
+  </div>`;
+}
 
 const draw = () => {
   render(html`<${Program} />`, document.getElementById('program'));
@@ -154,6 +268,8 @@ const draw = () => {
 draw();
 window.addEventListener('pane', draw);
 socket.on('program', (p) => { prog.data = p; draw(); });
+socket.on('games', (g) => { games.data = g; draw(); });
 socket.on('channels', () => { if (window.ch?.me && !window.ch.msgs.announcements) socket.emit('channel-history', { id: 'announcements' }, (r) => { if (r.ok) { window.ch.msgs.announcements = r.messages; draw(); } }); draw(); });
 socket.on('channel-msg', ({ channel }) => channel === 'announcements' && draw());
+socket.on('devices', draw); // who is in the room right now, for People
 setInterval(() => document.body.dataset.pane === 'program' && draw(), 60_000); // Now / Next moves with the clock

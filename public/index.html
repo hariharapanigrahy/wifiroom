@@ -126,12 +126,18 @@
     .item .when { flex: 0 0 56px; color: var(--accent); } .item .what { flex: 1; min-width: 0; } .item.past { opacity: .5; }
     .form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; } .form label { flex: 0 0 auto; }
     .form textarea { resize: vertical; }
-    button.sm { padding: 3px 7px; font-size: 12px; }
+    button.sm, select.sm { padding: 3px 7px; font-size: 12px; }
+    .pill { background: var(--accent); color: #1b1420; border-radius: 9px; padding: 0 6px; font-size: 10px; vertical-align: middle; }
     .poll { padding: 10px 0; border-top: 1px solid var(--hair); } .poll.closed { opacity: .7; }
     .poll .opt { position: relative; display: flex; width: 100%; text-align: left; background: #140f17; color: var(--ink); border: 1px solid var(--hair); margin: 4px 0; padding: 7px 10px; overflow: hidden; }
     .poll .opt .bar { position: absolute; left: 0; top: 0; bottom: 0; background: #f2b84b33; transition: width .3s; }
     .poll .opt.mine { border-color: var(--accent); } .poll .opt .txt { position: relative; flex: 1; } .poll .opt .n { position: relative; color: var(--muted); }
     .poll .opt:disabled { cursor: default; opacity: 1; }
+
+    .qbox { background: #140f17; border: 1px solid var(--hair); border-radius: 8px; padding: 12px; margin-top: 8px; }
+    .buzz { display: block; width: 100%; font-size: 28px; padding: 28px; border-radius: 16px; background: var(--warn); color: #fff; margin: 10px 0; box-shadow: 0 6px 0 #7a2020; }
+    .buzz:active { transform: translateY(4px); box-shadow: 0 2px 0 #7a2020; }
+    .buzz:disabled { background: #555; box-shadow: none; opacity: 1; }
 
     /* ---- overlays ---- */
     #call-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #1f3a2a; border-bottom: 2px solid var(--trust); }

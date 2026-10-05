@@ -13,7 +13,7 @@ const MAX_MESSAGES = 2000;  // kept per channel; older ones fall off
 const PAGE = 80;            // messages sent per history request
 const MAX_TEXT = 4000;
 
-const idOf = (key) => createHash('sha256').update(key).digest('hex').slice(0, 12);
+export const idOf = (key) => createHash('sha256').update(key).digest('hex').slice(0, 12);
 const isKey = (k) => typeof k === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(k);
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 // Channel names look like Slack's: lowercase, digits, dashes.

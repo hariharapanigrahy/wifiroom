@@ -17,8 +17,9 @@ import QRCode from 'qrcode';
 import { JSONFilePreset } from 'lowdb/node';
 import { startDrivers, capabilitiesOf, castName, runAction, screenTarget } from './drivers.js';
 import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeSettings, HOME_ACTIONS } from './home.js';
-import { startChannels } from './channels.js';
+import { startChannels, idOf as uidOf } from './channels.js';
 import { startProgram } from './program.js';
+import { startGames } from './games.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -72,7 +73,8 @@ const server = http.createServer(app);
 const io = new Server(server);
 const channelsOf = await startChannels({ dataDir: DATA_DIR, io });
 const programOf = await startProgram({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
-channelsOf.onChange(programOf.announce); // a newly identified page gets the program too
+const gamesOf = await startGames({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
+channelsOf.onChange(() => { programOf.announce(); gamesOf.announce(); }); // a newly identified page gets the program and games too
 
 // ---- discovery ----
 const bonjour = new Bonjour();
@@ -139,10 +141,11 @@ function logEvent(type, d) {
 // The host sees everything; visitors get only what the room needs to draw (no IPs or MACs).
 function snapshot(forHost) {
   return [...devices.values()].map((d) => {
-    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), chatKey: chatRoomOf(d) ? chatKeys.get(d.id) : undefined, sharing: screenTarget() === d.ip, caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
+    // uid: who this device is in channels and the program (see channels.js), so People can start a chat with them.
+    const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), chatKey: chatRoomOf(d) ? chatKeys.get(d.id) : undefined, uid: chatKeys.has(d.id) ? uidOf(chatKeys.get(d.id)) : undefined, sharing: screenTarget() === d.ip, caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
     if (forHost) return full;
-    const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, chatKey } = full; // no `sharing`, no home devices
-    return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, chatKey, caps: visitors ? ['ring'] : [] };
+    const { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, chatKey, uid } = full; // no `sharing`, no home devices
+    return { id, pos, zone, status, isSelf, nickname, bonjourName, randomMac, vendor, visitors, chatKey, uid, caps: visitors ? ['ring'] : [] };
   });
 }
 // The Socket.IO room that reaches a device's open browser tabs (the laptop's own character is the host page).
@@ -333,6 +336,7 @@ io.on('connection', async (socket) => {
   if (host) socket.join('host');
   channelsOf.attach(socket, { isHost: host });
   programOf.attach(socket);
+  gamesOf.attach(socket);
   const joinUrl = joinUrlOf();
   socket.emit('hello', {
     host, build: BUILD, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',
