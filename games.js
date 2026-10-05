@@ -168,7 +168,61 @@ const ludo = {
   },
 };
 
-const TYPES = { chess, ludo, quiz, likely };
+// ---- Crazy Eights: 2–6 seats, hidden hands. Match the top card's suit or rank; an 8 goes on anything and
+// names the next suit. No playable card: draw one (play it if it fits). First to empty their hand wins.
+const SUITS = ['♠', '♥', '♦', '♣'], RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const deck = () => { const d = []; for (const s of SUITS) for (const r of RANKS) d.push(r + s); for (let i = d.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [d[i], d[j]] = [d[j], d[i]]; } return d; };
+const rankOf = (c) => c.slice(0, -1), suitOf = (c) => c.slice(-1);
+const eights = {
+  name: 'Crazy Eights', icon: '🃏', min: 2, max: 6,
+  create: () => ({ started: false, hands: {}, pile: [], draw: [], suit: null, turn: 0, result: null, log: [], drew: false, locked: false }),
+  fits: (s, c) => rankOf(c) === '8' || suitOf(c) === s.suit || rankOf(c) === rankOf(s.pile.at(-1)),
+  step(g, s, uid, action, data) {
+    if (s.result) return;
+    const seat = g.players.indexOf(uid);
+    if (action === 'deal' && !s.started && seat >= 0 && g.players.length >= 2) {
+      s.draw = deck(); s.pile = []; s.hands = {};
+      for (const p of g.players) s.hands[p] = s.draw.splice(0, g.players.length > 4 ? 5 : 7);
+      do { s.pile.push(s.draw.shift()); } while (rankOf(s.pile.at(-1)) === '8'); // the first card up isn't an 8
+      s.suit = suitOf(s.pile.at(-1)); s.turn = 0; s.started = true; s.locked = true; s.drew = false;
+      s.log = [`${g.names[g.players[0]]} starts`];
+      return;
+    }
+    if (!s.started || seat !== s.turn) return;
+    const hand = s.hands[uid];
+    const next = () => { s.turn = (s.turn + 1) % g.players.length; s.drew = false; };
+    if (action === 'play' && typeof data?.card === 'string' && hand.includes(data.card) && eights.fits(s, data.card)) {
+      hand.splice(hand.indexOf(data.card), 1);
+      s.pile.push(data.card);
+      s.suit = rankOf(data.card) === '8' && SUITS.includes(data?.suit) ? data.suit : suitOf(data.card);
+      s.log.push(`${g.names[uid]} played ${data.card}${rankOf(data.card) === '8' ? ` → ${s.suit}` : ''}`);
+      if (!hand.length) { s.result = { winner: uid }; g.award(uid, 2); s.log.push(`${g.names[uid]} wins!`); return; }
+      if (hand.length === 1) s.log.push(`${g.names[uid]} has one card left`);
+      s.log = s.log.slice(-6);
+      next();
+      return;
+    }
+    if (action === 'draw' && !s.drew) {
+      if (!s.draw.length) { const top = s.pile.pop(); s.draw = s.pile.splice(0); s.pile = [top]; for (let i = s.draw.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [s.draw[i], s.draw[j]] = [s.draw[j], s.draw[i]]; } }
+      if (!s.draw.length) { s.log.push(`${g.names[uid]} can't draw, passes`); next(); return; }
+      const c = s.draw.shift();
+      hand.push(c); s.drew = true;
+      s.log.push(`${g.names[uid]} drew a card`);
+      if (!eights.fits(s, c)) next(); // nothing to play: the turn passes
+      return;
+    }
+    if (action === 'pass' && s.drew) { next(); }
+  },
+  // You see your own hand; others' hands are just counts.
+  view(s, uid, g) {
+    const seat = g.players.indexOf(uid);
+    const mine = s.hands[uid] ?? [];
+    return { started: s.started, seat, turn: s.turn, mine: seat === s.turn && !s.result, hand: mine, playable: seat === s.turn && !s.result ? mine.filter((c) => eights.fits(s, c)) : [], top: s.pile.at(-1) ?? null, suit: s.suit, drawLeft: s.draw.length, drew: s.drew,
+      counts: Object.fromEntries(g.players.map((p) => [p, s.hands[p]?.length ?? 0])), result: s.result, log: s.log.slice(-4), locked: s.locked };
+  },
+};
+
+const TYPES = { chess, ludo, eights, quiz, likely };
 
 export async function startGames({ dataDir, io, isHost, nameOf }) {
   const db = await JSONFilePreset(path.join(dataDir, 'games.json'), { scores: {}, games: [] });

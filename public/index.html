@@ -165,6 +165,14 @@
     .files progress { width: 100%; }
     .upbtn { position: relative; overflow: hidden; } .upbtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 
+    .pcard { display: inline-flex; flex-direction: column; align-items: center; justify-content: space-between; width: 52px; height: 74px; padding: 6px 4px; margin: 3px; background: #fff; color: #111; border: 2px solid #000; border-radius: 6px; font-size: 18px; font-weight: bold; line-height: 1; box-shadow: 0 3px 0 #000; }
+    .pcard.red { color: #c0392b; } .pcard .suit { font-size: 22px; }
+    .pcard:disabled { opacity: .55; cursor: default; } .pcard.lit { outline: 3px solid var(--trust); opacity: 1; transform: translateY(-6px); }
+    .pcard.back { background: repeating-linear-gradient(45deg, #3b7ddd, #3b7ddd 6px, #2a5ca8 6px, #2a5ca8 12px); color: #fff; font-size: 30px; justify-content: center; }
+    .pcard.back:not(:disabled) { outline: 3px solid var(--accent); }
+    .hand { display: flex; flex-wrap: wrap; margin-top: 8px; }
+    .turnname { color: var(--accent); } .redsuit { color: #e06c6c; }
+
     /* ---- overlays ---- */
     #call-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #1f3a2a; border-bottom: 2px solid var(--trust); }
     #call-bar span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }

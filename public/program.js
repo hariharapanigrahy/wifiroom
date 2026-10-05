@@ -204,7 +204,7 @@ function NewGame({ types }) {
       <input placeholder="Title (optional)" maxLength=${60} value=${title} onInput=${(e) => setTitle(e.target.value)} />
       <button onClick=${async () => { const r = await act('game-create', { type, title }); if (r.ok) { setTitle(''); games.open = r.id; draw(); } }}>Start</button>
     </div>
-    <p class="note">♟️ Chess: two seats, first to join is white. 🎲 Ludo: 2–4 seats, a 6 to leave base, captures send tokens home. 🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
+    <p class="note">♟️ Chess: two seats, first to join is white. 🎲 Ludo: 2–4 seats, a 6 to leave base, captures send tokens home. 🃏 Crazy Eights: 2–6, match suit or rank, 8s are wild. 🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
   <//>`;
 }
 
@@ -323,11 +323,40 @@ function LudoBoard({ g }) {
   </div>`;
 }
 
+// ---- Crazy Eights table: the top card, your hand (playable cards lit), everyone else's card count ----
+const SUIT_RED = (c) => /[♥♦]/.test(c);
+function PCard({ c, lit, onClick, small }) {
+  return html`<button class="pcard ${SUIT_RED(c) ? 'red' : ''} ${lit ? 'lit' : ''} ${small ? 'small' : ''}" disabled=${!onClick} onClick=${onClick}><span>${c.slice(0, -1)}</span><span class="suit">${c.slice(-1)}</span></button>`;
+}
+function Eights({ g }) {
+  const s = g.state, mine = me();
+  const [pick, setPick] = useState(null); // an 8 waiting for its suit
+  const names = Object.fromEntries(g.players.map((p) => [p.id, p.name]));
+  const turnName = names[g.players[s.turn]?.id];
+  if (!s.started) return html`<div><p class="note">${g.players.length < 2 ? 'Waiting for a second player…' : `${g.players.length} at the table. Anyone seated can deal.`}</p>
+    ${s.seat >= 0 && g.players.length >= 2 && html`<button onClick=${() => gact(g.id, 'deal')}>🃏 Deal</button>`}</div>`;
+  const play = (c) => (c.startsWith('8') ? setPick(c) : gact(g.id, 'play', { card: c }));
+  return html`<div class="eights">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap">${g.players.map((p, i) => html`<span key=${p.id} class=${i === s.turn ? 'turnname' : ''}>${p.name}: ${s.counts[p.id]} 🂠${i === s.turn && !s.result ? ' ◀' : ''}</span>`)}</div>
+    <div class="row" style="align-items:center;gap:16px;margin:12px 0">
+      <div><div class="note">Pile</div>${s.top && html`<${PCard} c=${s.top} />`}<div class="note">suit: <b class=${/[♥♦]/.test(s.suit) ? 'redsuit' : ''}>${s.suit}</b></div></div>
+      <div><div class="note">Draw (${s.drawLeft})</div><button class="pcard back" disabled=${!s.mine || s.drew} onClick=${() => gact(g.id, 'draw')}>🂠</button></div>
+      <div class="note" style="flex:1">${s.result ? `${names[s.result.winner]} wins!` : s.mine ? (s.drew ? (s.playable.length ? 'Play your drawn card, or pass' : 'Nothing to play') : s.playable.length ? 'Your turn: play a card or draw' : 'Nothing fits: draw a card') : `${turnName}'s turn`}
+        ${s.mine && s.drew && html`<p><button class="ghost sm" onClick=${() => gact(g.id, 'pass')}>Pass</button></p>`}</div>
+    </div>
+    ${pick && html`<div class="row" style="margin-bottom:8px"><span class="note">Suit for the 8:</span>${['♠', '♥', '♦', '♣'].map((su) => html`<button key=${su} class=${/[♥♦]/.test(su) ? 'ghost redsuit' : 'ghost'} onClick=${() => { gact(g.id, 'play', { card: pick, suit: su }); setPick(null); }}>${su}</button>`)}<button class="ghost sm" onClick=${() => setPick(null)}>Cancel</button></div>`}
+    ${s.seat >= 0 && html`<div class="hand">${s.hand.map((c) => html`<${PCard} key=${c} c=${c} lit=${s.playable.includes(c)} onClick=${s.playable.includes(c) ? () => play(c) : null} />`)}</div>`}
+    ${s.seat < 0 && html`<p class="note">You're watching. ${!s.locked ? 'Take a seat to play.' : ''}</p>`}
+    ${s.log.length > 0 && html`<p class="note">${s.log.join(' · ')}</p>`}
+  </div>`;
+}
+
 function GameView({ g }) {
-  const body = g.type === 'quiz' ? html`<${Quiz} g=${g} />` : g.type === 'chess' ? html`<${ChessBoard} g=${g} />` : g.type === 'ludo' ? html`<${LudoBoard} g=${g} />` : html`<${Likely} g=${g} />`;
+  const body = { quiz: Quiz, chess: ChessBoard, ludo: LudoBoard, eights: Eights, likely: Likely }[g.type] ?? Likely;
+  const bodyEl = html`<${body} g=${g} />`;
   return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${g.runs && html`<button class="ghost sm" onClick=${() => confirm('End this game?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
     ${!g.joined && (!g.seats || g.players.length < g.seats) && html`<p><button onClick=${() => act('game-join', { id: g.id })}>${g.seats ? 'Take a seat' : 'Join this game'}</button></p>`}
-    ${(g.joined || g.runs || g.seats) && body}
+    ${(g.joined || g.runs || g.seats) && bodyEl}
     <p class="note">Playing: ${g.players.map((p) => p.name).join(', ') || 'nobody yet'}</p>
   <//>`;
 }
