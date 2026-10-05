@@ -3,8 +3,10 @@ const S = 3;            // pixel-art scale
 const T = 16 * S;       // tile size on screen
 // Phones get a tall room instead of a wide one: the trusted half on top, the unknown half below it and the
 // door at the bottom. The server's positions stay in the wide layout; toScreen/toRoom convert.
-const PHONE = matchMedia('(max-width: 640px)').matches;
+const PHONE = matchMedia('(max-width: 760px)').matches; // same breakpoint as the app shell's tab bar
 if (PHONE) document.body.classList.add('phone');
+// The room's layout is fixed when the page loads, so crossing the breakpoint (a laptop window shrunk) reloads.
+matchMedia('(max-width: 760px)').addEventListener('change', () => location.reload());
 const px = (n) => `${PHONE ? Math.round(n * 1.4) : n}px`; // text is drawn bigger on phones so it stays readable
 const COLS = PHONE ? 10 : 20, ROWS = PHONE ? 23 : 12, W = COLS * T, H = ROWS * T;
 const DIVIDER = 10 * T; // left of this = trusted, right = unknown (in the wide layout)
@@ -15,7 +17,7 @@ const FRAMES = { self: 84, ghost: 108, people: [85, 86, 87, 88, 96, 97, 98, 99, 
 const TILES = { wall: 40, floor: 49, door: 45, chest: 89, barrel: 82 };
 
 const params = new URLSearchParams(location.search);
-const socket = io({ autoConnect: false, auth: { code: params.get('code') ?? '' } });
+const socket = window.socket = io({ autoConnect: false, auth: { code: params.get('code') ?? '' } });
 const chars = new Map(); // id -> { sprite, label, zzz, d }
 const state = { host: false, you: null, devices: new Map(), reactions: [], firstSync: true, selected: null, home: { list: [], homeAssistant: {} }, snapshots: {} };
 const HOME_ICONS = { light: '💡', switch: '🔌', plug: '🔌', climate: '🌡️', camera: '📷', cover: '🪟', bridge: '🌉' };
@@ -443,7 +445,7 @@ function toast(msg) {
   setTimeout(() => t.remove(), 4000);
 }
 
-new Phaser.Game({
+window.roomGame = new Phaser.Game({
   type: Phaser.AUTO, parent: 'room', width: W, height: H, pixelArt: true, backgroundColor: '#1b1420', scene: [Room],
   input: { touch: { capture: !PHONE }, mouse: { preventDefaultWheel: !PHONE } }, // the tall phone room must still scroll the page
   scale: PHONE ? { mode: Phaser.Scale.WIDTH_CONTROLS_HEIGHT } : { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_HORIZONTALLY },

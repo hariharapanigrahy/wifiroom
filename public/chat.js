@@ -157,14 +157,14 @@ function checkKeys() {
 const chatList = () => Object.values(chats).filter((c) => c && c.id).sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
 
 function updateBadge() {
-  const n = chatList().reduce((sum, c) => sum + (c.unread ?? 0), 0);
+  const n = chatList().reduce((sum, c) => sum + (c.unread ?? 0), 0) + (typeof channelUnread === 'function' ? channelUnread() : 0);
   $('chats-badge').textContent = n ? String(n) : '';
 }
 
 function openChats(chatId) {
   view.screen = chatId ? 'chat' : 'list';
   view.chatId = chatId ?? null;
-  $('chats').classList.add('open');
+  showPane('chats');
   renderChats();
   if (chatId) $('chats-text').focus();
 }
@@ -178,13 +178,42 @@ function openDm(id) {
   openChats(dmId(me, id));
 }
 
+// The Chats pane: a list of channels and people on the left, the open conversation on the right
+// (stacked on phones: the list, then the conversation with a back button).
 function renderChats() {
   updateBadge();
   if (!$('chats').classList.contains('open')) return;
+  if ($('chats').contains(document.activeElement) && document.activeElement.dataset.keep) return; // typing
+  rememberNames();
+  $('chats').classList.toggle('conv', view.screen !== 'list');
+  renderChatList();
+  renderConversation();
+}
+
+function renderChatList() {
+  const people = reachable();
+  const rows = chatList().map((c) => {
+    const last = c.msgs.at(-1);
+    return el('button', { className: `chat-row${view.chatId === c.id ? ' on' : ''}`, type: 'button', onclick: () => openChats(c.id) },
+      el('span', {}, c.kind === 'group' ? '👥' : '💬'),
+      el('span', { className: 'who' }, chatName(c), el('div', { textContent: last ? `${last.system ? '' : last.from === myId() ? 'You: ' : c.kind === 'group' ? `${personName(last.from)}: ` : ''}${last.text ?? `📎 ${last.file?.name}`}` : 'No messages yet' })),
+      el('span', { className: 'badge', textContent: c.unread ? String(c.unread) : '' }));
+  });
+  const start = people.filter((d) => !chats[dmId(myId(), d.id)]).map((d) => el('button', { className: 'chat-row', type: 'button', onclick: () => openDm(d.id) }, el('span', {}, '➕'), el('span', { className: 'who', textContent: nameOf(d) })));
+  $('chats-list').replaceChildren(...channelSection(),
+    h3('Direct messages'),
+    ...rows,
+    ...(start.length ? [h3('Start a private chat'), ...start] : rows.length ? [] : [el('p', { className: 'note', textContent: people.length ? '' : `Nobody else is in the room yet. Others join by opening ${roomAddress()} on their phone.` })]),
+    ...waitingList(),
+    el('p', {}, btn('👥 New group', () => { view.screen = 'new'; view.picked.clear(); renderChats(); }, 'ghost')),
+    el('p', { className: 'lock' }, '🔒 Direct messages are end-to-end encrypted and kept only on your device. Your security code: ', el('b', { textContent: securityCode(myChatKey()) })));
+}
+
+function renderConversation() {
   const body = $('chats-body'), sub = $('chats-sub');
   const form = $('chats-form'), back = $('chats-back');
-  if (body.contains(document.activeElement) && document.activeElement.dataset.keep) return; // typing a group name
-  rememberNames();
+  if (view.screen === 'channel') return channelScreen(body, sub, back, form);
+  if (view.screen === 'newchannel') { form.style.display = $('chats-call').style.display = 'none'; return newChannelScreen(body, sub, back); }
   if (view.screen === 'chat' && chats[view.chatId]) {
     const chat = chats[view.chatId];
     chat.unread = 0;
@@ -244,30 +273,17 @@ function renderChats() {
     body.replaceChildren(name, ...picks, ...(picks.length >= 2 ? [] : [el('p', { className: 'note', textContent: `A group needs at least two other people with the room page open${picks.length ? ' (only one is here now)' : ''}.` })]), ...waitingList(), el('p', {}, create));
     return;
   }
-  $('chats-title').textContent = '💬 Private chats';
+  $('chats-title').textContent = 'Chats';
   back.style.display = 'none';
-  sub.replaceChildren(el('p', { className: 'lock' }, '🔒 End-to-end encrypted. Your security code: ', el('b', { textContent: securityCode(myChatKey()) })));
-  const rows = chatList().map((c) => {
-    const last = c.msgs.at(-1);
-    return el('button', { className: 'chat-row', type: 'button', onclick: () => openChats(c.id) },
-      el('span', {}, c.kind === 'group' ? '👥' : '💬'),
-      el('span', { className: 'who' }, chatName(c), el('div', { textContent: last ? `${last.system ? '' : last.from === myId() ? 'You: ' : c.kind === 'group' ? `${personName(last.from)}: ` : ''}${last.text ?? `📎 ${last.file?.name}`}` : 'No messages yet' })),
-      el('span', { className: 'badge', textContent: c.unread ? String(c.unread) : '' }));
-  });
-  const start = people.filter((d) => !chats[dmId(myId(), d.id)]).map((d) => el('button', { className: 'chat-row', type: 'button', onclick: () => openDm(d.id) }, el('span', {}, '➕'), el('span', { className: 'who', textContent: nameOf(d) })));
-  body.replaceChildren(...rows,
-    h3('Start a private chat'),
-    ...(start.length ? start : [el('p', { className: 'note', textContent: people.length ? 'You already have a chat with everyone here.' : `Nobody else has the room page open yet. Others join by opening ${roomAddress()} on their phone.` })]),
-    ...waitingList(),
-    el('p', {}, btn('👥 New group', () => { view.screen = 'new'; view.picked.clear(); renderChats(); }, 'ghost')));
+  sub.replaceChildren();
+  body.replaceChildren(el('div', { className: 'empty' }, el('div', { textContent: '💬', style: 'font-size:40px' }), el('p', { textContent: 'Pick a channel or a person.' })));
 }
 
-$('open-chats').onclick = () => openChats();
 $('chats-back').onclick = () => openChats();
 $('chats-attach').onclick = () => $('chats-file').click();
 $('chats-file').onchange = () => { const chat = chats[view.chatId]; if (chat) shareFiles(chat, [...$('chats-file').files]); $('chats-file').value = ''; };
 $('chats-call').onclick = () => { const chat = chats[view.chatId]; if (chat) startCall(chat); };
-$('chats-form').onsubmit = (e) => { e.preventDefault(); send($('chats-text').value); $('chats-text').value = ''; $('chats-text').focus(); };
+$('chats-form').onsubmit = (e) => { e.preventDefault(); (view.screen === 'channel' ? sendToChannel(view.chatId, $('chats-text').value) : send($('chats-text').value)); $('chats-text').value = ''; $('chats-text').focus(); };
 
 // Offer our key to the room (visitors send it with "join"; the host page has no join step) and keep the
 // chats screen in step with who is around.

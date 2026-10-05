@@ -17,6 +17,7 @@ import QRCode from 'qrcode';
 import { JSONFilePreset } from 'lowdb/node';
 import { startDrivers, capabilitiesOf, castName, runAction, screenTarget } from './drivers.js';
 import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeSettings, HOME_ACTIONS } from './home.js';
+import { startChannels } from './channels.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -64,9 +65,11 @@ app.get('/room.json', (req, res) => res.json({
   wifiroom: true, since: STARTED, phone: process.platform === 'android',
   joined: [...io.sockets.sockets.values()].filter((s) => s.data.deviceId).length,
 }));
+app.get('/lib/htm-preact.js', (req, res) => res.sendFile(path.join(PKG_DIR, 'node_modules/htm/preact/standalone.module.js'))); // Preact + htm for the Program, Games and People panes
 app.get('/lib/nacl-fast.min.js', (req, res) => res.sendFile(path.join(NACL_DIR, 'nacl-fast.min.js'))); // private chat encryption
 const server = http.createServer(app);
 const io = new Server(server);
+const channelsOf = await startChannels({ dataDir: DATA_DIR, io });
 
 // ---- discovery ----
 const bonjour = new Bonjour();
@@ -325,6 +328,7 @@ io.use((socket, next) => {
 io.on('connection', async (socket) => {
   const host = socket.data.host;
   if (host) socket.join('host');
+  channelsOf.attach(socket, { isHost: host });
   const joinUrl = joinUrlOf();
   socket.emit('hello', {
     host, build: BUILD, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',

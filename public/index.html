@@ -2,63 +2,124 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
   <title>WiFiRoom</title>
   <style>
-    :root { --bg: #1b1420; --panel: #2a2030; --ink: #f3e9dc; --muted: #a99bb0; --accent: #f2b84b; --trust: #6fcf97; --warn: #eb5757; --line: #000; }
+    :root { --bg: #1b1420; --panel: #2a2030; --panel2: #221a28; --ink: #f3e9dc; --muted: #a99bb0; --accent: #f2b84b; --trust: #6fcf97; --warn: #eb5757; --line: #000; --hair: #ffffff14; --nav: 220px; --tabbar: 58px; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 ui-monospace, Menlo, Consolas, monospace; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
-    .wrap { width: min(960px, calc(100vw - 24px)); }
-    header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 0; flex-wrap: wrap; }
-    h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
-    h1 span { color: var(--muted); font-weight: normal; font-size: 13px; }
-    .bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    html, body { height: 100%; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 ui-monospace, Menlo, Consolas, monospace; }
     button, .btn { font: inherit; background: var(--accent); color: #1b1420; border: 0; padding: 7px 12px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
     button:disabled { opacity: .5; cursor: wait; }
     .ghost { background: transparent; color: var(--ink); border: 1px solid var(--muted); }
     .host-only { display: none; } body.host .host-only { display: revert; }
+    .in-room-only { display: none; } body.in-room .in-room-only { display: revert; }
+    input, select, textarea { width: 100%; font: inherit; padding: 6px; background: #140f17; color: var(--ink); border: 1px solid var(--muted); border-radius: 4px; }
+    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .row input { flex: 1; width: auto; min-width: 0; }
+    .note { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
+    h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 6px; }
+    .badge { background: var(--warn); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+    .badge:empty { display: none; }
+
+    /* ---- app shell: sidebar on laptops, tab bar on phones ---- */
+    #app { display: grid; grid-template-columns: var(--nav) 1fr; height: 100%; }
+    #nav { background: var(--panel2); border-right: 1px solid var(--hair); display: flex; flex-direction: column; padding: 14px 10px; gap: 4px; overflow: auto; }
+    #nav .brand { padding: 2px 8px 12px; }
+    #nav .brand h1 { font-size: 18px; margin: 0; letter-spacing: 1px; }
+    #nav .brand span { color: var(--muted); font-weight: normal; font-size: 12px; display: block; margin-top: 2px; }
+    #nav .navbtn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: transparent; color: var(--ink); padding: 9px 10px; border-radius: 6px; }
+    #nav .navbtn .ico { font-size: 18px; width: 24px; text-align: center; }
+    #nav .navbtn.on { background: var(--panel); }
+    #nav .navbtn .lbl { flex: 1; }
+    #nav .sep { flex: 1; }
+    #nav .tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 4px; border-top: 1px solid var(--hair); }
+    #nav .tools button { font-size: 12px; padding: 5px 9px; }
+    main { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    .pane { display: none; flex: 1; min-height: 0; overflow: auto; }
+    .pane.on { display: flex; flex-direction: column; }
+    .pane > header { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--hair); }
+    .pane > header h2 { margin: 0; font-size: 16px; flex: 1; }
+    .pane .content { padding: 16px 18px; flex: 1; overflow: auto; }
+    .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 24px; }
+    @media (max-width: 760px) {
+      #app { grid-template-columns: 1fr; grid-template-rows: 1fr var(--tabbar); }
+      #nav { order: 2; flex-direction: row; justify-content: space-around; padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); gap: 0; border-right: 0; border-top: 1px solid var(--hair); overflow: hidden; }
+      #nav .brand, #nav .sep, #nav .tools { display: none; }
+      #nav .navbtn { flex-direction: column; gap: 1px; padding: 4px 2px; font-size: 10px; width: auto; flex: 1; text-align: center; }
+      #nav .navbtn .ico { font-size: 20px; }
+      #nav .navbtn .lbl { flex: 0; }
+      #nav .navbtn.on { background: transparent; color: var(--accent); }
+      .pane > header { padding: 10px 12px; }
+      .pane .content { padding: 12px; }
+    }
+
+    /* ---- Room pane ---- */
+    #pane-room .content { padding: 0; display: flex; flex-direction: column; align-items: center; }
+    #pane-room .wrap { width: min(960px, 100%); padding: 10px 12px; }
     #stage { position: relative; }
     #room canvas { display: block; image-rendering: pixelated; border-radius: 6px; }
     #panel { position: absolute; top: 10px; right: 10px; width: 280px; max-height: calc(100% - 20px); overflow: auto; background: var(--panel); border: 2px solid var(--line); border-radius: 6px; padding: 14px; display: none; box-shadow: 0 6px 0 #000; }
     #panel.open { display: block; }
     #panel h2 { margin: 0 0 2px; font-size: 15px; padding-right: 20px; }
     #panel .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
-    #panel h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 14px 0 6px; }
     #panel dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: 12px; }
     #panel dt { color: var(--muted); } #panel dd { margin: 0; word-break: break-all; }
-    input, select { width: 100%; font: inherit; padding: 6px; background: #140f17; color: var(--ink); border: 1px solid var(--muted); border-radius: 4px; }
-    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-    .row input { flex: 1; width: auto; min-width: 0; }
     .emoji { background: #140f17; border: 1px solid var(--muted); font-size: 18px; padding: 3px 7px; }
     .close { position: absolute; top: 6px; right: 8px; background: none; color: var(--muted); padding: 2px 6px; }
-    .note { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
     #chat { margin-top: 8px; display: none; } body.in-room #chat { display: flex; }
-    .in-room-only { display: none; } body.in-room .in-room-only { display: revert; }
-    .badge { background: var(--warn); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
-    .badge:empty { display: none; }
-    #chats > div { width: min(440px, 100%); height: min(640px, 90vh); display: flex; flex-direction: column; padding: 14px; }
-    #chats .top { display: flex; align-items: center; gap: 8px; padding-right: 28px; }
-    #chats .top h2 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #chats .scroll { flex: 1; overflow: auto; margin: 8px 0; min-height: 0; }
+    footer#hint { color: var(--muted); font-size: 11px; padding: 10px 0; text-align: center; }
+    body.phone #pane-room .wrap { padding: 0; }
+    body.phone #room canvas { border-radius: 0; }
+    body.phone #chat, body.phone footer#hint { padding-left: 12px; padding-right: 12px; }
+    @media (max-width: 760px) { #panel { position: fixed; top: auto; bottom: var(--tabbar); left: 0; right: 0; width: auto; max-height: 60vh; border-radius: 10px 10px 0 0; z-index: 20; } }
+    .home-item { border-top: 1px solid var(--hair); padding: 8px 0; }
+    .home-item input[type=range] { padding: 0; }
+    .row input.swatch { flex: 0 0 36px; height: 30px; padding: 2px; }
+    .row input.temp { flex: 0 0 72px; }
+    .snapshot { width: 100%; border-radius: 4px; margin-top: 6px; display: block; }
+
+    /* ---- Chats pane: list | conversation ---- */
+    #chats { display: grid; grid-template-columns: 290px 1fr; flex: 1; min-height: 0; }
+    #chats-list { border-right: 1px solid var(--hair); overflow: auto; padding: 10px 12px; background: var(--panel2); }
+    #chats-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    #chats .top { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--hair); }
+    #chats .top h2 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+    #chats-sub { padding: 0 14px; }
+    #chats .scroll { flex: 1; overflow: auto; padding: 8px 14px; min-height: 0; }
+    #chats-form { padding: 10px 14px; border-top: 1px solid var(--hair); }
+    #chats-back { display: none; }
     .lock { color: var(--trust); font-size: 12px; margin: 4px 0 0; }
     .lock b { color: var(--ink); letter-spacing: 1px; font-weight: normal; }
-    .chat-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: transparent; color: var(--ink); border: 0; border-bottom: 1px solid #ffffff14; border-radius: 0; padding: 10px 2px; }
+    .chat-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: transparent; color: var(--ink); border: 0; border-radius: 6px; padding: 8px 6px; }
+    .chat-row.on { background: var(--panel); }
     .chat-row .who { flex: 1; min-width: 0; }
     .chat-row .who div { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .pick { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid #ffffff14; }
+    .pick { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid var(--hair); }
     .pick input { width: auto; }
-    .msg { max-width: 82%; margin: 6px 0; padding: 6px 10px; border-radius: 10px; background: #140f17; border: 1px solid #ffffff1a; word-wrap: break-word; white-space: pre-wrap; }
+    .msg { max-width: min(82%, 640px); margin: 6px 0; padding: 6px 10px; border-radius: 10px; background: #140f17; border: 1px solid #ffffff1a; word-wrap: break-word; white-space: pre-wrap; }
     .msg.mine { margin-left: auto; background: #3a2f1a; border-color: #f2b84b55; }
     .msg .meta { display: block; color: var(--muted); font-size: 11px; }
     .msg.system { max-width: none; background: none; border: 0; color: var(--muted); font-size: 12px; text-align: center; }
+    .msg a { color: var(--accent); }
     #chats details { font-size: 12px; color: var(--muted); }
     #chats details li { margin: 3px 0; }
+    @media (max-width: 760px) {
+      #chats { grid-template-columns: 1fr; }
+      #chats-list { border-right: 0; }
+      #chats-main { display: none; }
+      #chats.conv #chats-list { display: none; }
+      #chats.conv #chats-main { display: flex; }
+      #chats-back { display: inline-block; }
+    }
+
+    /* ---- overlays ---- */
     #call-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #1f3a2a; border-bottom: 2px solid var(--trust); }
     #call-bar span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
-    .msg a { color: var(--accent); }
-    #toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; z-index: 30; pointer-events: none; }
+    #toasts { position: fixed; bottom: calc(16px + var(--tabbar)); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; z-index: 30; pointer-events: none; }
+    @media (min-width: 761px) { #toasts { bottom: 16px; } }
     .toast { background: var(--panel); border: 2px solid var(--line); padding: 8px 14px; border-radius: 6px; box-shadow: 0 4px 0 #000; animation: in .25s ease-out; }
-    #cards { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 25; width: min(300px, calc(100vw - 24px)); }
+    #cards { position: fixed; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 25; width: min(300px, calc(100vw - 24px)); }
     .card { background: var(--panel); border: 2px solid var(--accent); border-radius: 8px; padding: 10px; box-shadow: 0 4px 0 #000; animation: in .25s ease-out; }
     .card img { width: 100%; border-radius: 4px; display: block; margin: 6px 0; }
     .card .url { font-size: 11px; color: var(--muted); word-break: break-all; margin: 4px 0 8px; }
@@ -71,46 +132,59 @@
     .code { font-size: 26px; letter-spacing: 6px; text-align: center; color: var(--accent); }
     .warn { background: #3a1f24; border: 1px solid var(--warn); border-radius: 4px; padding: 8px; font-size: 12px; margin-top: 10px; }
     #timeline ol { list-style: none; padding: 0; margin: 0; font-size: 12px; }
-    #timeline li { padding: 5px 0; border-bottom: 1px solid #ffffff14; display: flex; gap: 10px; }
+    #timeline li { padding: 5px 0; border-bottom: 1px solid var(--hair); display: flex; gap: 10px; }
     #timeline time { color: var(--muted); white-space: nowrap; }
+    #home-settings label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
     #ring { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-size: 20px; color: #fff; animation: flash .35s steps(1) infinite; cursor: pointer; padding: 24px; }
     #ring > div { font-size: 96px; }
     @keyframes flash { 0% { background: #eb5757; } 50% { background: #1b1420; } }
-    .home-item { border-top: 1px solid #ffffff14; padding: 8px 0; }
-    .home-item input[type=range] { padding: 0; }
-    .row input.swatch { flex: 0 0 36px; height: 30px; padding: 2px; }
-    .row input.temp { flex: 0 0 72px; }
-    .snapshot { width: 100%; border-radius: 4px; margin-top: 6px; display: block; }
-    #home-settings label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
-    footer { color: var(--muted); font-size: 11px; padding: 10px; text-align: center; }
-    body.phone .wrap { width: 100vw; }
-    body.phone header, body.phone #chat, body.phone footer { padding-left: 12px; padding-right: 12px; }
-    body.phone #room canvas { border-radius: 0; }
-    @media (max-width: 640px) { #panel { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 60vh; border-radius: 10px 10px 0 0; z-index: 20; } }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <h1>WiFiRoom <span id="count"></span></h1>
-      <div class="bar">
-        <button class="ghost in-room-only" id="open-chats">💬 Chats<span class="badge" id="chats-badge"></span></button>
-        <button class="ghost host-only" id="open-home">🏡 Home</button>
-        <button class="ghost host-only" id="open-timeline">🕒 Timeline</button>
-        <button class="ghost host-only" id="alerts">🔔 Alerts</button>
-        <button class="host-only" id="open-invite">📲 Invite</button>
-        <button class="host-only ghost" id="scan" title="Ping every address on your Wi-Fi once to find quiet devices">Scan</button>
+  <div id="app">
+    <nav id="nav">
+      <div class="brand"><h1>WiFiRoom</h1><span id="count"></span></div>
+      <button class="navbtn on" data-pane="room"><span class="ico">🏠</span><span class="lbl">Room</span></button>
+      <button class="navbtn" data-pane="chats"><span class="ico">💬</span><span class="lbl">Chats</span><span class="badge" id="chats-badge"></span></button>
+      <button class="navbtn" data-pane="program"><span class="ico">📅</span><span class="lbl">Program</span></button>
+      <button class="navbtn" data-pane="games"><span class="ico">🎲</span><span class="lbl">Games</span></button>
+      <button class="navbtn" data-pane="people"><span class="ico">👥</span><span class="lbl">People</span></button>
+      <div class="sep"></div>
+      <div class="tools host-only">
+        <button id="open-invite">📲 Invite</button>
+        <button class="ghost" id="open-home">🏡 Home</button>
+        <button class="ghost" id="open-timeline">🕒 Timeline</button>
+        <button class="ghost" id="alerts">🔔 Alerts</button>
+        <button class="ghost" id="scan" title="Ping every address on your Wi-Fi once to find quiet devices">Scan</button>
       </div>
-    </header>
-    <div id="stage">
-      <div id="room"></div>
-      <aside id="panel"><button class="close" id="close">✕</button><div id="panel-body"></div></aside>
-    </div>
-    <form id="chat" class="row" autocomplete="off">
-      <input id="chat-text" maxlength="140" placeholder="Say something to the room…">
-      <button>Say</button>
-    </form>
-    <footer id="hint"></footer>
+    </nav>
+    <main>
+      <section class="pane on" id="pane-room"><div class="content"><div class="wrap">
+        <div id="stage">
+          <div id="room"></div>
+          <aside id="panel"><button class="close" id="close">✕</button><div id="panel-body"></div></aside>
+        </div>
+        <form id="chat" class="row" autocomplete="off">
+          <input id="chat-text" maxlength="140" placeholder="Say something to the room…">
+          <button>Say</button>
+        </form>
+        <footer id="hint"></footer>
+      </div></div></section>
+
+      <section class="pane" id="pane-chats"><div id="chats">
+        <div id="chats-list"></div>
+        <div id="chats-main">
+          <div class="top"><button class="ghost" id="chats-back" type="button" aria-label="Back">‹</button><h2 id="chats-title">Chats</h2><button class="ghost" id="chats-call" type="button" title="Voice call">📞</button></div>
+          <div id="chats-sub"></div>
+          <div class="scroll" id="chats-body"></div>
+          <form id="chats-form" class="row" autocomplete="off"><button class="ghost" id="chats-attach" type="button" title="Send files">📎</button><input type="file" id="chats-file" multiple hidden><input id="chats-text" maxlength="4000" placeholder="Message…" data-keep="1"><button>Send</button></form>
+        </div>
+      </div></section>
+
+      <section class="pane" id="pane-program"><header><h2>📅 Program</h2></header><div class="content" id="program"></div></section>
+      <section class="pane" id="pane-games"><header><h2>🎲 Games</h2></header><div class="content" id="games"></div></section>
+      <section class="pane" id="pane-people"><header><h2>👥 People</h2></header><div class="content" id="people"></div></section>
+    </main>
   </div>
 
   <div id="cards"></div>
@@ -135,14 +209,6 @@
       <button>Enter the room</button>
       <p class="note" id="join-err" style="color:var(--warn)"></p>
     </form>
-  </div></div>
-
-  <div class="modal" id="chats"><div>
-    <button class="close" data-close>✕</button>
-    <div class="top"><button class="ghost" id="chats-back" type="button" aria-label="Back">‹</button><h2 id="chats-title">💬 Private chats</h2><button class="ghost" id="chats-call" type="button" title="Voice call">📞</button></div>
-    <div id="chats-sub"></div>
-    <div class="scroll" id="chats-body"></div>
-    <form id="chats-form" class="row" autocomplete="off"><button class="ghost" id="chats-attach" type="button" title="Send files">📎</button><input type="file" id="chats-file" multiple hidden><input id="chats-text" maxlength="1000" placeholder="Message…" data-keep="1"><button>Send</button></form>
   </div></div>
 
   <div class="modal" id="timeline"><div>
@@ -177,8 +243,11 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/lib/phaser.min.js"></script>
   <script src="/lib/nacl-fast.min.js"></script>
+  <script src="app.js"></script>
   <script src="room.js"></script>
   <script src="chat.js"></script>
   <script src="p2p.js"></script>
+  <script src="channels.js"></script>
+  <script type="module" src="program.js"></script>
 </body>
 </html>
