@@ -72,8 +72,10 @@ function Schedule({ items }) {
     ${days.map(({ d, items }) => html`<div key=${d}><div class="dayhead">${d}</div>
       ${items.map((i) => editing === i.id ? html`<${ScheduleForm} key=${i.id} item=${i} onDone=${() => setEditing(null)} />` : html`<div class="item ${i.end ? t >= i.end : t - i.start > 2 * 3600e3 ? 'past' : ''}" key=${i.id}>
         <div class="when">${hm(i.start)}${i.end ? html`<br/><span class="note">${hm(i.end)}</span>` : ''}</div>
-        <div class="what"><b>${i.title}</b>${i.where && html`<div class="note">📍 ${i.where}</div>`}${i.notes && html`<div class="note">${i.notes}</div>`}</div>
-        ${i.mine && html`<div class="row"><button class="ghost sm" onClick=${() => setEditing(i.id)}>✏️</button><button class="ghost sm" onClick=${() => confirm(`Remove "${i.title}"?`) && act('schedule-delete', { id: i.id })}>🗑</button></div>`}
+        <div class="what"><b>${i.title}</b>${i.where && html`<div class="note">📍 ${i.where}</div>`}${i.notes && html`<div class="note">${i.notes}</div>`}
+          <div class="note">${i.going.length ? `👍 ${i.going.join(', ')}` : ''}${i.byName && !amHost() ? `${i.going.length ? ' · ' : ''}added by ${i.byName}` : ''}</div></div>
+        <div class="row"><button class="${i.goingMe ? '' : 'ghost'} sm" onClick=${() => act('schedule-rsvp', { id: i.id, going: !i.goingMe })}>${i.goingMe ? "✓ I'm in" : "I'm in"}</button>
+          ${i.mine && html`<button class="ghost sm" title="Post to #announcements" onClick=${() => act('schedule-announce', { id: i.id }).then((r) => r.ok && toast('📣 Posted to #announcements'))}>📣</button><button class="ghost sm" onClick=${() => setEditing(i.id)}>✏️</button><button class="ghost sm" onClick=${() => confirm(`Remove "${i.title}"?`) && act('schedule-delete', { id: i.id })}>🗑</button>`}</div>
       </div>`)}
     </div>`)}
   <//>`;
@@ -83,13 +85,15 @@ function Polls({ polls }) {
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState('');
   const [opts, setOpts] = useState('');
+  const [closes, setCloses] = useState('');
   return html`<${Card} title="Polls" right=${!adding && html`<button class="ghost" onClick=${() => setAdding(true)}>＋ New poll</button>`}>
     ${adding && html`<div class="form"><input placeholder="Question" value=${q} maxLength=${140} onInput=${(e) => setQ(e.target.value)} />
       <textarea rows="4" placeholder="One option per line" value=${opts} onInput=${(e) => setOpts(e.target.value)}></textarea>
-      <div class="row"><button onClick=${async () => { const r = await act('poll-create', { question: q, options: opts.split('\n') }); if (r.ok) { setQ(''); setOpts(''); setAdding(false); } }}>Start poll</button><button class="ghost" onClick=${() => setAdding(false)}>Cancel</button></div></div>`}
+      <div class="row"><label class="note">Closes</label><input type="datetime-local" value=${closes} onInput=${(e) => setCloses(e.target.value)} /><span class="note">(optional)</span></div>
+      <div class="row"><button onClick=${async () => { const r = await act('poll-create', { question: q, options: opts.split('\n'), closes: fromInput(closes) }); if (r.ok) { setQ(''); setOpts(''); setCloses(''); setAdding(false); } }}>Start poll</button><button class="ghost" onClick=${() => setAdding(false)}>Cancel</button></div></div>`}
     ${!polls.length && !adding && html`<p class="note">No polls yet.</p>`}
     ${polls.map((p) => html`<div class="poll ${p.open ? '' : 'closed'}" key=${p.id}>
-      <div class="row"><b style="flex:1">${p.question}</b><span class="note">${p.open ? `${p.total} vote${p.total === 1 ? '' : 's'}` : `Closed · ${p.total} votes`}</span></div>
+      <div class="row"><b style="flex:1">${p.question}</b><span class="note">${p.open ? `${p.total} vote${p.total === 1 ? '' : 's'}${p.closes ? ` · closes ${sameDay(p.closes, Date.now()) ? '' : `${day(p.closes)} `}${hm(p.closes)}` : ''}` : `Closed · ${p.total} votes`}</span></div>
       ${p.options.map((o, i) => html`<button class="opt ${o.mine ? 'mine' : ''}" disabled=${!p.open} onClick=${() => act('poll-vote', { id: p.id, option: i })}>
         <span class="bar" style=${`width:${p.total ? Math.round((100 * o.votes) / p.total) : 0}%`}></span><span class="txt">${o.mine ? '✓ ' : ''}${o.text}</span><span class="n">${o.votes}</span></button>`)}
       <div class="row" style="margin-top:4px"><span class="note" style="flex:1">by ${p.by}</span>${p.mine && html`<button class="ghost sm" onClick=${() => act('poll-close', { id: p.id, open: !p.open })}>${p.open ? 'Close' : 'Reopen'}</button><button class="ghost sm" onClick=${() => confirm('Delete this poll?') && act('poll-delete', { id: p.id })}>🗑</button>`}</div>
@@ -570,6 +574,8 @@ const draw = () => {
 draw();
 window.addEventListener('pane', draw);
 socket.on('program', (p) => { prog.data = p; draw(); });
+// Ten minutes before something on the schedule, and when it starts: a toast, a buzz, and a notification when the page is hidden.
+socket.on('program-alert', ({ text }) => { toast(text); navigator.vibrate?.([200, 100, 200]); if (document.hidden) notify(text); });
 socket.on('games', (g) => { games.data = g; draw(); });
 socket.on('shares', (d) => { shr.data = d; draw(); });
 socket.on('channels', () => { if (window.ch?.me && !window.ch.msgs.announcements) socket.emit('channel-history', { id: 'announcements' }, (r) => { if (r.ok) { window.ch.msgs.announcements = r.messages; draw(); } }); draw(); });

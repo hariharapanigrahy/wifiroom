@@ -351,6 +351,8 @@ export async function startChannels({ dataDir, io }) {
     attach,
     isHost: (uid) => !!users[uid]?.host,
     nameOf: (uid) => users[uid]?.name ?? 'Someone',
+    // Post into a channel for another module (the program's alerts and announcements).
+    say: (cid, text, from) => channels[cid] && post(channels[cid], from && users[from] ? { from, text } : { system: true, text }),
     onChange: (f) => listeners.push(f), // runs after anyone identifies, joins or leaves
     // For the room itself (server.js): a removed person can't walk in as a character either, nor anyone new while locked.
     admits: (key) => { if (!isKey(key)) return { ok: true }; const uid = idOf(key); if (users[uid]?.banned) return { ok: false, error: 'The host removed you from this room' }; if (db.data.locked && !users[uid]) return { ok: false, error: 'The host has locked this room' }; return { ok: true }; },

@@ -11,7 +11,7 @@ const id = () => randomBytes(5).toString('hex');
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const when = (t) => (Number.isFinite(t) && t > 0 ? Math.round(t) : null);
 
-export async function startProgram({ dataDir, io, isHost, nameOf }) {
+export async function startProgram({ dataDir, io, isHost, nameOf, say }) {
   const db = await JSONFilePreset(path.join(dataDir, 'program.json'), { title: '', schedule: [], polls: [], signups: [] });
   const P = db.data;
   let dirty = null;
@@ -20,12 +20,35 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
   // What everyone sees. Votes stay on the host: each person gets the counts plus their own choice.
   const snapshot = (uid) => ({
     title: P.title,
-    schedule: [...P.schedule].sort((a, b) => a.start - b.start).map((i) => ({ ...i, mine: i.by === uid || isHost(uid) })),
-    polls: P.polls.map((p) => ({ id: p.id, question: p.question, open: p.open, ts: p.ts, by: nameOf(p.by), mine: p.by === uid || isHost(uid), total: p.options.reduce((n, o) => n + o.votes.length, 0),
+    schedule: [...P.schedule].sort((a, b) => a.start - b.start).map((i) => ({ ...i, alerts: undefined, mine: i.by === uid || isHost(uid), byName: nameOf(i.by), going: (i.going ?? []).map(nameOf), goingMe: (i.going ?? []).includes(uid) })),
+    polls: P.polls.map((p) => ({ id: p.id, question: p.question, open: p.open, closes: p.closes ?? null, ts: p.ts, by: nameOf(p.by), mine: p.by === uid || isHost(uid), total: p.options.reduce((n, o) => n + o.votes.length, 0),
       options: p.options.map((o) => ({ text: o.text, votes: o.votes.length, mine: o.votes.includes(uid) })) })),
     signups: P.signups.map((s) => ({ id: s.id, title: s.title, max: s.max, people: s.people.map(nameOf), mine: s.people.includes(uid), by: nameOf(s.by), owner: s.by === uid || isHost(uid) })),
   });
   const announce = () => { for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('program', snapshot(s.data.uid)); };
+  const place = (i) => (i.where ? ` · ${i.where}` : '');
+
+  // Alerts: ten minutes before something starts, and when it starts, everyone gets a nudge and
+  // #announcements gets a line. Polls with a closing time close themselves.
+  const SOON = 10 * 60_000;
+  const alert = (kind, item, text) => {
+    (item.alerts ??= []).push(kind);
+    say('announcements', text);
+    for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('program-alert', { kind, id: item.id, title: item.title, where: item.where, start: item.start, text });
+  };
+  const tick = () => {
+    const now = Date.now();
+    let changed = false;
+    for (const i of P.schedule) {
+      const left = i.start - now;
+      if (left > 0 && left <= SOON && !i.alerts?.includes('soon')) { alert('soon', i, `⏰ ${i.title} starts in ${Math.max(1, Math.round(left / 60_000))} min${place(i)}`); changed = true; }
+      if (left <= 0 && left > -2 * 60_000 && !i.alerts?.includes('now')) { alert('now', i, `▶️ ${i.title} is starting now${place(i)}`); changed = true; }
+    }
+    for (const p of P.polls) if (p.open && p.closes && p.closes <= now) { p.open = false; say('general', `🗳️ Poll closed: ${p.question}`); changed = true; }
+    if (changed) { save(); announce(); }
+  };
+  const timer = setInterval(tick, 20_000);
+  timer.unref?.();
 
   function attach(socket) {
     const uid = () => socket.data.uid;
@@ -53,7 +76,7 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
       if (!title || !start) return ack?.({ ok: false, error: 'A title and a start time are needed' });
       const old = typeof item.id === 'string' ? P.schedule.find((x) => x.id === item.id) : null;
       if (old && !owns(old)) return ack?.({ ok: false, error: 'Only whoever added this, or the host, can change it' });
-      const it = { id: old ? old.id : id(), title, start, end: when(item.end), where: clean(item.where, 60), notes: clean(item.notes, 300), by: old ? old.by : uid() };
+      const it = { id: old ? old.id : id(), title, start, end: when(item.end), where: clean(item.where, 60), notes: clean(item.notes, 300), by: old ? old.by : uid(), going: old?.going ?? [], alerts: old && old.start === start ? old.alerts : [] };
       const i = P.schedule.findIndex((x) => x.id === it.id);
       i >= 0 ? (P.schedule[i] = it) : P.schedule.push(it);
       if (P.schedule.length > MAX_ITEMS) P.schedule.shift();
@@ -65,12 +88,33 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
       save(); ack?.({ ok: true }); announce();
     });
 
-    socket.on('poll-create', ({ question, options } = {}, ack) => {
+    // "I'm in": who plans to be there.
+    socket.on('schedule-rsvp', ({ id: sid, going } = {}, ack) => {
+      const me = uid(), it = P.schedule.find((x) => x.id === sid);
+      if (!me || !it) return ack?.({ ok: false, error: 'No such item' });
+      it.going = (it.going ?? []).filter((p) => p !== me);
+      if (going) it.going.push(me);
+      save(); ack?.({ ok: true }); announce();
+    });
+    // Put an item in #announcements, as whoever announces it.
+    socket.on('schedule-announce', ({ id: sid } = {}, ack) => {
+      const it = P.schedule.find((x) => x.id === sid);
+      if (!it || !owns(it)) return deny(ack);
+      const d = new Date(it.start);
+      const today = d.toDateString() === new Date().toDateString();
+      const when = `${today ? '' : `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} `}${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      say('announcements', `📅 ${it.title} · ${when}${place(it)}${it.notes ? ` · ${it.notes}` : ''}`, uid());
+      ack?.({ ok: true });
+    });
+
+    socket.on('poll-create', ({ question, options, closes } = {}, ack) => {
       if (!signedIn(ack)) return;
       const q = clean(question, 140);
       const opts = (Array.isArray(options) ? options : []).map((o) => clean(o, 60)).filter(Boolean).slice(0, 8);
       if (!q || opts.length < 2) return ack?.({ ok: false, error: 'A question and at least two options' });
-      P.polls.unshift({ id: id(), question: q, options: opts.map((text) => ({ text, votes: [] })), open: true, ts: Date.now(), by: uid() });
+      const closeAt = when(closes);
+      if (closeAt && closeAt <= Date.now()) return ack?.({ ok: false, error: 'The closing time has already passed' });
+      P.polls.unshift({ id: id(), question: q, options: opts.map((text) => ({ text, votes: [] })), open: true, closes: closeAt, ts: Date.now(), by: uid() });
       P.polls = P.polls.slice(0, 50);
       save(); ack?.({ ok: true }); announce();
     });
