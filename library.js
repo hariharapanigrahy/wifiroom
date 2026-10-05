@@ -60,7 +60,8 @@ export async function startLibrary({ dataDir, app, io, isHost, nameOf, idOf }) {
     const f = L.files.find((x) => x.id === req.params.id);
     if (!f) return res.status(404).send('No such file');
     res.setHeader('Content-Disposition', `${req.query.download !== undefined || f.kind === 'file' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(f.name)}`);
-    res.sendFile(diskPath(f), { headers: { 'Content-Type': f.mime }, acceptRanges: true, cacheControl: false }, (err) => { if (err && !res.headersSent) res.status(404).send('Gone'); });
+    // dotfiles: the data folder is ~/.wifiroom, which sendFile would otherwise treat as hidden.
+    res.sendFile(diskPath(f), { headers: { 'Content-Type': f.mime }, acceptRanges: true, cacheControl: false, dotfiles: 'allow' }, (err) => { if (err && !res.headersSent) res.status(404).send('Gone'); });
   });
 
   function attach(socket) {
