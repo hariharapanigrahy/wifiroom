@@ -387,6 +387,8 @@ $('join-form').onsubmit = (e) => {
   state.name = $('join-name').value;
   socket.emit('join', { name: state.name, chatKey: myChatKey() });
 };
+socket.on('join-refused', ({ error }) => { $('join').classList.add('open'); $('join-err').textContent = error; });
+socket.on('removed', () => { document.body.innerHTML = '<div class="empty" style="height:100vh"><div style="font-size:40px">🚪</div><p>The host removed you from this room.</p></div>'; });
 socket.on('you', ({ id }) => { state.you = id; $('join').classList.remove('open'); document.body.classList.add('in-room'); syncRoom([...state.devices.values()]); });
 
 socket.on('devices', (list) => { state.devices = new Map(list.map((d) => [d.id, d])); syncRoom(list); });

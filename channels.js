@@ -26,8 +26,9 @@ const LINK_TTL = 2 * 60_000;
 const isB64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9+/=]+$/.test(s);
 
 export async function startChannels({ dataDir, io }) {
-  const db = await JSONFilePreset(path.join(dataDir, 'channels.json'), { users: {}, channels: {}, messages: {} });
+  const db = await JSONFilePreset(path.join(dataDir, 'channels.json'), { users: {}, channels: {}, messages: {}, locked: false });
   const { users, channels, messages } = db.data;
+  db.data.locked ??= false;
   if (!channels.general) {
     channels.general = { id: 'general', name: 'general', kind: 'public', topic: 'Everyone on this Wi-Fi', members: [], created: Date.now(), by: null };
     messages.general = [];
@@ -45,13 +46,13 @@ export async function startChannels({ dataDir, io }) {
   const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: EVERYONE.includes(ch.id) ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false });
   const listFor = (uid) => Object.values(channels).filter((ch) => canSee(ch, uid)).map((ch) => view(ch, uid));
   const room = (cid) => `ch:${cid}`;
-  const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host, tag: id.slice(0, 4) }]));
+  const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host, tag: id.slice(0, 4), banned: !!u.banned }]));
   const online = new Map(); // uid -> count of open pages
 
   // Everyone's channel list and the people list, after anything that changes them.
   const listeners = [];
   const announce = () => {
-    for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('channels', { list: listFor(s.data.uid), people: peopleView() });
+    for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('channels', { list: listFor(s.data.uid), people: peopleView(), locked: db.data.locked });
     for (const f of listeners) f();
   };
 
@@ -60,6 +61,9 @@ export async function startChannels({ dataDir, io }) {
     socket.on('identify', ({ key, name } = {}, ack) => {
       if (!isKey(key)) return ack?.({ ok: false, error: 'bad key' });
       const uid = idOf(key);
+      // Host powers: someone the host removed stays out until let back; a locked room takes nobody new.
+      if (users[uid]?.banned) { ack?.({ ok: false, error: 'The host removed you from this room', banned: true }); return socket.disconnect(true); }
+      if (db.data.locked && !users[uid] && !isHost) return ack?.({ ok: false, error: 'The host has locked this room; nobody new can join right now', locked: true });
       const u = (users[uid] ??= { name: '', key, seen: 0, host: false });
       const cleanName = clean(name, 40);
       // One name per person in this room, so nobody can pass for someone else.
@@ -89,6 +93,27 @@ export async function startChannels({ dataDir, io }) {
     socket.on('disconnect', () => { leaveAll(); save(); announce(); });
 
     const me = () => socket.data.uid && users[socket.data.uid] ? socket.data.uid : null;
+
+    // ---- host powers ----
+    socket.on('person-kick', ({ who } = {}, ack) => {
+      const h = me();
+      if (!h || !users[h]?.host || !users[who] || users[who].host) return ack?.({ ok: false, error: 'Not allowed' });
+      users[who].banned = true;
+      for (const s of io.sockets.sockets.values()) if (s.data.uid === who) { s.emit('removed'); s.disconnect(true); }
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('person-unban', ({ who } = {}, ack) => {
+      const h = me();
+      if (!h || !users[h]?.host || !users[who]) return ack?.({ ok: false, error: 'Not allowed' });
+      delete users[who].banned;
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('room-lock', ({ locked } = {}, ack) => {
+      const h = me();
+      if (!h || !users[h]?.host) return ack?.({ ok: false, error: 'Not allowed' });
+      db.data.locked = !!locked;
+      save(); ack?.({ ok: true }); announce();
+    });
 
     // ---- device linking (see the note at the top) ----
     socket.on('link-offer', ({ token, box, nonce } = {}, ack) => {
@@ -209,5 +234,7 @@ export async function startChannels({ dataDir, io }) {
     isHost: (uid) => !!users[uid]?.host,
     nameOf: (uid) => users[uid]?.name ?? 'Someone',
     onChange: (f) => listeners.push(f), // runs after anyone identifies, joins or leaves
+    // For the room itself (server.js): a removed person can't walk in as a character either, nor anyone new while locked.
+    admits: (key) => { if (!isKey(key)) return { ok: true }; const uid = idOf(key); if (users[uid]?.banned) return { ok: false, error: 'The host removed you from this room' }; if (db.data.locked && !users[uid]) return { ok: false, error: 'The host has locked this room' }; return { ok: true }; },
   };
 }

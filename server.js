@@ -359,6 +359,8 @@ io.on('connection', async (socket) => {
 
   socket.on('join', async ({ name, chatKey } = {}) => {
     if (host || !allow('join', 2000)) return;
+    const gate = channelsOf.admits(chatKey);
+    if (!gate.ok) return socket.emit('join-refused', { error: gate.error });
     const ip = v4(socket.handshake.address);
     let d = [...devices.values()].find((x) => x.ip === ip);
     if (!d) {

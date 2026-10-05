@@ -146,7 +146,8 @@ function Person({ p }) {
       <span class="who">${p.name} <span class="note">#${p.tag}</span>${p.id === me() ? ' (you)' : ''}${p.host ? html` <span class="pill">host</span>` : ''}<div>${p.online ? (dev ? 'in the room' : 'online') : `last seen ${new Date(p.seen).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}</div></span>
       ${dev && html`<button class="ghost sm" onClick=${dm}>💬</button><button class="ghost sm" onClick=${call} title="Voice call">📞</button>`}
       ${dev && dev.caps?.includes('ring') && html`<button class="ghost sm" title="Ring their phone" onClick=${() => socket.emit('ring', { to: dev.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`))}>🔔</button>`}
-      ${channels.length > 0 && p.id !== me() && html`<select class="sm" style="width:auto" onChange=${(e) => { if (e.target.value) { act('channel-invite', { id: e.target.value, who: p.id }); e.target.value = ''; } }}>
+      ${amHost() && p.id !== me() && !p.host && html`<button class="ghost sm" title=${p.banned ? 'Let them back in' : 'Remove from this room'} onClick=${() => (p.banned ? act('person-unban', { who: p.id }) : confirm(`Remove ${p.name} from this room? They stay out until you let them back.`) && act('person-kick', { who: p.id }))}>${p.banned ? '↩ Allow back' : '🚫'}</button>`}
+      ${channels.length > 0 && p.id !== me() && !p.banned && html`<select class="sm" style="width:auto" onChange=${(e) => { if (e.target.value) { act('channel-invite', { id: e.target.value, who: p.id }); e.target.value = ''; } }}>
         <option value="">＋ add to…</option>${channels.map((c) => html`<option value=${c.id}>${c.kind === 'public' ? '#' : '🔒'} ${c.name}</option>`)}</select>`}
     </div></div>`;
 }
@@ -154,10 +155,14 @@ function People() {
   const people = Object.entries(window.ch?.people ?? {}).map(([id, p]) => ({ id, ...p })).sort((a, b) => (b.online - a.online) || (b.host - a.host) || a.name.localeCompare(b.name));
   if (!me()) return html`<${NamePrompt} />`;
   if (!people.length) return html`<${Empty} icon="👥"><p>Nobody has joined yet. Share the room's address or the Invite QR.</p><//>`;
-  const here = people.filter((p) => p.online), away = people.filter((p) => !p.online);
+  const here = people.filter((p) => p.online && !p.banned), away = people.filter((p) => !p.online && !p.banned), banned = people.filter((p) => p.banned);
+  const locked = !!window.ch?.locked;
   return html`<div class="program">
+    ${amHost() && html`<div class="row" style="margin-bottom:8px"><button class=${locked ? '' : 'ghost'} onClick=${() => act('room-lock', { locked: !locked })}>${locked ? '🔒 Room locked · unlock' : '🔓 Lock the room'}</button><span class="note" style="flex:1">${locked ? 'Nobody new can join. People already here stay.' : 'Anyone on this Wi-Fi can join. Lock it once everyone is in.'}</span></div>`}
+    ${!amHost() && locked && html`<p class="note">🔒 The host has locked the room; nobody new can join.</p>`}
     <h3>${here.length} here now</h3>${here.map((p) => html`<${Person} p=${p} key=${p.id} />`)}
     ${away.length > 0 && html`<h3>Been here before</h3>${away.map((p) => html`<${Person} p=${p} key=${p.id} />`)}`}
+    ${amHost() && banned.length > 0 && html`<h3>Removed</h3>${banned.map((p) => html`<${Person} p=${p} key=${p.id} />`)}`}
     <p class="note">💬 opens a private, end-to-end encrypted chat. 📞 calls them. People show up here once they've picked a name. The #code next to a name comes from their key and can't be chosen: same name, different code, different person.</p>
     <${LinkDevice} />
   </div>`;

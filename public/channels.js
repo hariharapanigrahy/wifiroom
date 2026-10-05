@@ -13,6 +13,7 @@ function identify() {
   socket.emit('identify', { key: myChatKey(), name }, (r) => {
     if (r?.ok) { ch.me = r.uid; ch.host = r.host; ch.nameError = null; }
     else if (r?.taken) { ch.nameError = r.error; save('wifiroom.myName', ''); toast(`⚠️ ${r.error}`); }
+    else if (r?.locked || r?.banned) { ch.nameError = r.error; toast(`⚠️ ${r.error}`); }
     renderChats();
   });
 }
@@ -62,7 +63,7 @@ function offerLink(code) {
 window.wifiroomLink = { startLinkWait, offerLink, linkKeys, newLinkCode, link };
 socket.on('hello', () => setTimeout(identify, 100)); // after chat.js has registered the key
 socket.on('you', identify);
-socket.on('channels', ({ list, people }) => { ch.list = list; ch.people = people; renderChats(); });
+socket.on('channels', ({ list, people, locked }) => { ch.list = list; ch.people = people; ch.locked = !!locked; renderChats(); });
 socket.on('channel-msg', ({ channel, message }) => {
   (ch.msgs[channel] ??= []).push(message);
   const open = view.screen === 'channel' && view.chatId === channel && $('chats').classList.contains('open');
