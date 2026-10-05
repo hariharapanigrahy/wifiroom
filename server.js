@@ -20,7 +20,7 @@ import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeS
 import { startChannels, idOf as uidOf } from './channels.js';
 import { startProgram } from './program.js';
 import { startGames } from './games.js';
-import { startLibrary } from './library.js';
+import { startShares } from './shares.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -75,8 +75,8 @@ const io = new Server(server);
 const channelsOf = await startChannels({ dataDir: DATA_DIR, io });
 const programOf = await startProgram({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
 const gamesOf = await startGames({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
-const libraryOf = await startLibrary({ dataDir: DATA_DIR, app, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf, idOf: uidOf });
-channelsOf.onChange(() => { programOf.announce(); gamesOf.announce(); libraryOf.announce(); }); // a newly identified page gets the program and games too
+const sharesOf = startShares({ io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
+channelsOf.onChange(() => { programOf.announce(); gamesOf.announce(); sharesOf.announce(); }); // a newly identified page gets the program and games too
 
 // ---- discovery ----
 const bonjour = new Bonjour();
@@ -339,7 +339,7 @@ io.on('connection', async (socket) => {
   channelsOf.attach(socket, { isHost: host });
   programOf.attach(socket);
   gamesOf.attach(socket);
-  libraryOf.attach(socket);
+  sharesOf.attach(socket);
   const joinUrl = joinUrlOf();
   socket.emit('hello', {
     host, build: BUILD, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',

@@ -81,12 +81,13 @@ socket.on('signal', async ({ from, nonce, box }) => {
 });
 
 // ---- files ----
-function shareFiles(chat, list) {
+// `list` holds Files, or File-like objects ({ name, size, type, slice }) for a folder the phone app shares.
+function shareFiles(chat, list, { share } = {}) {
   for (const file of list) {
     if (file.size > MAX_FILE) { toast(`⚠️ ${file.name} is over ${fmtSize(MAX_FILE)}`); continue; }
     const key = nacl.randomBytes(nacl.secretbox.keyLength);
     const meta = { id: hex(8), name: file.name.slice(0, 200), size: file.size, mime: file.type || 'application/octet-stream' };
-    const f = { meta, url: URL.createObjectURL(file), mine: true, targets: 0, done: 0, failed: 0, sending: {} };
+    const f = { meta, url: file instanceof Blob ? URL.createObjectURL(file) : null, mine: true, targets: 0, done: 0, failed: 0, sending: {}, share };
     files.set(meta.id, f);
     addMsg(chat, { from: myId(), file: meta, ts: Date.now() });
     renderChats();
@@ -105,8 +106,9 @@ function shareFiles(chat, list) {
 }
 
 async function sendFileTo(to, file, f, key) {
-  const channel = window.RTCPeerConnection ? await openChannel(to, f.meta.id).catch(() => null) : null;
+  const channel = window.RTCPeerConnection ? await openDataChannel(to, f.meta.id).catch(() => null) : null;
   for (let at = 0; at < file.size; at += CHUNK) {
+    if (f.aborted) { channel?.close(); throw new Error('the share was stopped'); }
     const chunk = new Uint8Array(await file.slice(at, at + CHUNK).arrayBuffer());
     if (channel) {
       if (channel.readyState !== 'open') throw new Error('the connection closed');
@@ -124,7 +126,7 @@ async function sendFileTo(to, file, f, key) {
 }
 
 // A direct channel for one file, or a rejection if the two devices can't reach each other in a few seconds.
-function openChannel(to, id) {
+function openDataChannel(to, id) { // not openChannel: channels.js uses that name for chat channels
   const channel = peer(to).pc.createDataChannel(`file:${id}`);
   channel.binaryType = 'arraybuffer';
   channel.bufferedAmountLowThreshold = 1024 * 1024;
@@ -193,6 +195,7 @@ function fileView(m) {
   const label = `📎 ${m.file.name} · ${fmtSize(m.file.size)}`;
   if (!f) return [label, el('span', { className: 'meta', textContent: 'No longer here: files stay only until the page is closed.' })];
   const link = f.url ? el('a', { href: f.url, download: m.file.name, textContent: label, onclick: (e) => saveFile(e, f) }) : label;
+  if (f.mine && f.share) return [label, el('span', { className: 'meta', textContent: `From your shared folder · ${Object.values(f.sending).length ? `sending ${Math.floor(100 * Object.values(f.sending)[0])}%` : f.done ? 'sent' : f.failed ? 'not delivered' : 'starting…'}` })];
   let status;
   if (f.mine) {
     const going = Object.values(f.sending);

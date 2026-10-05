@@ -330,68 +330,106 @@ function Games() {
   </div>`;
 }
 
-// ---- Files: the shared library on the host device (library.js on the server) ----
-const lib = { data: null, playing: null, uploads: [] };
+// ---- Shares: folders people allow from their own devices (shares.js on the server). Only the listing
+// goes to the room; a requested file is sent device to device through the chat with the owner (p2p.js). ----
+const shr = { data: null, local: new Map(), open: new Set() }; // local: share id -> { name, files: Map(path -> File-like) }
 const fmtBytes = (n) => (n < 1024 ** 2 ? `${Math.round(n / 1024)} KB` : n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(2)} GB`);
-function uploadFiles(list) {
-  for (const file of list) {
-    const u = { name: file.name, size: file.size, done: 0, error: null };
-    lib.uploads.push(u); draw();
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', `/api/library/upload?name=${encodeURIComponent(file.name)}`);
-    xhr.setRequestHeader('x-wifiroom-key', myChatKey());
-    xhr.setRequestHeader('content-type', file.type || 'application/octet-stream');
-    xhr.upload.onprogress = (e) => { u.done = e.loaded; draw(); };
-    xhr.onload = () => { if (xhr.status !== 200) { u.error = (() => { try { return JSON.parse(xhr.responseText).error; } catch { return `HTTP ${xhr.status}`; } })(); toast(`⚠️ ${file.name}: ${u.error}`); } else { lib.uploads = lib.uploads.filter((x) => x !== u); let st = 'ok'; try { st = JSON.parse(xhr.responseText).status; } catch {} toast(st === 'pending' ? `⏳ ${file.name} is waiting for the host's approval` : `📁 ${file.name} is in Files`); } draw(); };
-    xhr.onerror = () => { u.error = 'upload failed'; draw(); };
-    xhr.send(file);
-  }
+const KIND_ICON = { image: '🖼', video: '🎬', audio: '🎵', file: '📄' };
+
+// Start a share from a list of File-like objects ({ name, size, type, slice(a, b) }) with relative paths.
+async function startShare(name, entries) {
+  const files = new Map(entries.map((e) => [e.path, e.file]));
+  const r = await ask('share-start', { name, files: entries.map((e) => ({ path: e.path, size: e.file.size, mime: e.file.type || '' })) });
+  if (!r.ok) return toast(`⚠️ ${r.error}`);
+  shr.local.set(r.id, { name, files });
+  toast(`📂 ${name} is shared with the room`);
 }
-function Player({ f }) {
-  const src = f.status === 'pending' ? `${f.url}?key=${encodeURIComponent(myChatKey())}` : f.url; // a pending file is only served to its uploader and the host
-  return html`<div class="player">
-    ${f.kind === 'video' ? html`<video src=${src} controls autoplay playsinline />` : f.kind === 'audio' ? html`<audio src=${src} controls autoplay />` : html`<img src=${src} alt=${f.name} />`}
-    <div class="row" style="padding:8px"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${f.name}</b><a class="btn ghost" href=${`${src}?download`} download=${f.name}>⬇ Save</a><button class="ghost" onClick=${() => { lib.playing = null; draw(); }}>✕</button></div>
-  </div>`;
+const MAX_SHARE_FILES = 2000;
+function pickFolder(input) {
+  const list = [...input.files];
+  if (!list.length) return;
+  if (list.length > MAX_SHARE_FILES) return toast(`⚠️ That folder has ${list.length} files; a share can list up to ${MAX_SHARE_FILES}. Pick a smaller folder.`);
+  const root = list[0].webkitRelativePath?.split('/')[0] || 'Folder';
+  startShare(root, list.map((f) => ({ path: (f.webkitRelativePath || f.name).split('/').slice(1).join('/') || f.name, file: f })));
+  input.value = '';
 }
-const POLICY = { approval: 'Uploads wait for the host to approve them', open: 'Anyone in the room can share files', host: 'Only the host shares files' };
-function Files() {
+// Chrome and Edge: the folder-access prompt ("let the site view files"), which reads nothing until a file is asked for.
+// Elsewhere the classic folder input is used, whose prompt wrongly says "upload": nothing is uploaded either way.
+async function pickFolderHandle() {
+  let dir;
+  try { dir = await showDirectoryPicker({ mode: 'read' }); } catch { return; }
+  const entries = [];
+  const walk = async (h, prefix) => {
+    for await (const [name, entry] of h.entries()) {
+      if (entries.length >= MAX_SHARE_FILES) return;
+      if (name.startsWith('.')) continue;
+      if (entry.kind === 'directory') await walk(entry, `${prefix}${name}/`);
+      else { const f = await entry.getFile(); entries.push({ path: prefix + name, file: f }); }
+    }
+  };
+  await walk(dir, '');
+  if (entries.length >= MAX_SHARE_FILES) toast(`⚠️ Only the first ${MAX_SHARE_FILES} files of ${dir.name} are listed; pick a smaller folder to share everything.`);
+  startShare(dir.name, entries);
+}
+// The phone app's folder picker hands back a listing; its files are read through the app in chunks.
+window.wifiroom = { startShare, stopShare, getFile }; // for tests and the app
+window.onFolderPicked = (json) => {
+  const { name, files } = JSON.parse(json);
+  const app = window.WiFiRoomFolder;
+  const entries = files.map((f) => ({ path: f.path, file: { name: f.path.split('/').pop(), size: f.size, type: f.mime || '', slice: (a, b) => ({ arrayBuffer: async () => Uint8Array.from(atob(app.readChunk(f.uri, a, Math.min(b, f.size) - a)), (c) => c.charCodeAt(0)).buffer }) } }));
+  startShare(name, entries);
+};
+async function stopShare(id) {
+  await act('share-stop', { id });
+  for (const f of files.values()) if (f.share === id) f.aborted = true; // cuts off downloads in progress
+  shr.local.delete(id);
+  draw();
+}
+// The owner's page: someone asked for a file, so send it to them through the chat with them.
+socket.on('share-serve', ({ id, path, to, toName }) => {
+  const local = shr.local.get(id), file = local?.files.get(path);
+  const dev = deviceOf(to);
+  if (!file) return;
+  if (!dev) return toast(`⚠️ ${toName} asked for ${path} but isn't reachable right now`);
+  const chat = ensureChat(dmId(myId(), dev.id), 'dm', [myId(), dev.id]);
+  saveChats();
+  shareFiles(chat, [file], { share: id });
+  toast(`📤 Sending ${file.name} to ${toName}`);
+});
+async function getFile(sh, f) {
+  const r = await ask('share-get', { id: sh.id, path: f.path });
+  if (!r.ok) return toast(`⚠️ ${r.error}`);
+  const dev = deviceOf(sh.byId);
+  toast(`📥 Asked ${sh.by} for ${f.path.split('/').pop()}. It arrives in your chat with them.`);
+  if (dev) openDm(dev.id);
+}
+
+function Shares() {
   if (!me()) return html`<${NamePrompt} />`;
-  const d = lib.data;
-  if (!d) return html`<${Empty} icon="📁"><p>Loading…</p><//>`;
-  const playing = d.files.find((f) => f.id === lib.playing);
-  const pending = d.files.filter((f) => f.status === 'pending');
-  const shown = d.files.filter((f) => f.status === 'ok');
-  const groups = [['image', '🖼 Photos'], ['video', '🎬 Videos'], ['audio', '🎵 Music'], ['file', '📄 Other files']].map(([k, t]) => [t, shown.filter((f) => f.kind === k)]).filter(([, l]) => l.length);
-  const canUpload = d.policy !== 'host' || d.host;
-  const icon = { video: '🎬', audio: '🎵', file: '📄' };
+  const d = shr.data;
+  if (!d) return html`<${Empty} icon="📂"><p>Loading…</p><//>`;
+  const mine = d.shares.filter((s) => s.mine), others = d.shares.filter((s) => !s.mine);
+  const app = window.WiFiRoomFolder;
   return html`<div class="files program">
     <div class="row" style="margin-bottom:10px">
-      ${canUpload && html`<label class="btn upbtn">⬆ Upload files<input type="file" multiple onChange=${(e) => { uploadFiles([...e.target.files]); e.target.value = ''; }} /></label>`}
-      <span class="note" style="flex:1">${POLICY[d.policy]}. Kept on the host device${d.free ? ` · ${fmtBytes(d.free)} free there` : ''}.</span>
-      ${d.host && html`<select class="sm" style="width:auto" value=${d.policy} onChange=${(e) => act('library-policy', { policy: e.target.value })}>${Object.entries(POLICY).map(([k, v]) => html`<option value=${k}>${v}</option>`)}</select>`}
+      ${app?.pickFolder ? html`<button onClick=${() => app.pickFolder()}>📂 Allow a folder</button>` : window.showDirectoryPicker ? html`<button onClick=${pickFolderHandle}>📂 Allow a folder</button>` : html`<label class="btn upbtn">📂 Allow a folder<input type="file" webkitdirectory directory multiple onChange=${(e) => pickFolder(e.target)} /></label>`}
+      <span class="note" style="flex:1">Nothing is uploaded anywhere. Files stay on your device; the room sees only the listing (up to ${MAX_SHARE_FILES} files), and a file is sent, encrypted, only to a person who asks for it. Stop any time. ${window.showDirectoryPicker || app ? '' : 'Your browser\'s folder prompt may say "upload"; it isn\'t one.'}</span>
     </div>
-    ${pending.length > 0 && html`<${Card} title=${d.host ? `Waiting for your approval · ${pending.length}` : 'Waiting for the host'}>
-      ${pending.map((f) => html`<div class="item" key=${f.id}><div class="when">⏳</div><div class="what"><b>${f.name}</b><div class="note">${fmtBytes(f.size)} · ${f.by} · ${f.kind === 'file' ? 'download only' : f.kind}</div></div>
-        <div class="row">${d.host && f.kind !== 'file' && html`<button class="ghost sm" onClick=${() => { lib.playing = f.id; draw(); }}>👁</button>`}${d.host && html`<button class="sm" onClick=${() => act('library-approve', { id: f.id })}>✓ Approve</button>`}<button class="ghost sm" onClick=${() => confirm(`Remove ${f.name}?`) && act('library-delete', { id: f.id })}>${d.host ? '✗ Reject' : '🗑'}</button></div></div>`)}
+    ${mine.length > 0 && html`<${Card} title="Your shares">
+      ${mine.map((sh) => html`<div class="item" key=${sh.id}><div class="when">📂</div><div class="what"><b>${sh.name}</b><div class="note">${sh.files.length} files · ${fmtBytes(sh.files.reduce((n, f) => n + f.size, 0))}${sh.sent?.length ? ` · sent ${sh.sent.length}: ${[...new Set(sh.sent.map((x) => x.to))].join(', ')}` : ''}</div></div>
+        <button class="ghost sm" onClick=${() => confirm(`Stop sharing ${sh.name}? Downloads in progress stop too.`) && stopShare(sh.id)}>⏹ Stop</button></div>`)}
     <//>`}
-    <p class="warn">Files are shared as-is by people in this room; nothing checks them. Photos, music and video play here; everything else is download only. Open downloads at your own risk.</p>
-    ${lib.uploads.map((u) => html`<div class="item" key=${u.name}><div class="what"><b>${u.name}</b> <span class="note">${u.error ? `⚠️ ${u.error}` : `${fmtBytes(u.done)} of ${fmtBytes(u.size)}`}</span>${!u.error && html`<progress max=${u.size} value=${u.done}></progress>`}</div></div>`)}
-    ${playing && html`<${Player} f=${playing} />`}
-    ${!shown.length && !pending.length && html`<${Empty} icon="📁"><p>Nothing shared yet. Photos, music, a movie, notes: upload and everyone here can open it.</p><//>`}
-    ${groups.map(([title, list]) => html`<${Card} title=${`${title} · ${list.length}`} key=${title}>
-      ${list[0].kind === 'image' ? html`<div class="grid">${list.map((f) => html`<div class="tile" key=${f.id} onClick=${() => { lib.playing = f.id; draw(); }}><img src=${f.url} loading="lazy" alt=${f.name} /><div class="cap">${f.name}</div></div>`)}</div>`
-      : list.map((f) => html`<div class="item" key=${f.id}>
-          <div class="when">${icon[f.kind]}</div>
-          <div class="what" style="cursor:pointer" onClick=${() => { if (f.kind !== 'file') { lib.playing = f.id; draw(); } }}><b>${f.name}</b><div class="note">${fmtBytes(f.size)} · ${f.by} · ${new Date(f.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div></div>
-          <div class="row">${f.kind !== 'file' && html`<button class="ghost sm" onClick=${() => { lib.playing = f.id; draw(); }}>▶</button>`}<a class="btn ghost sm" href=${`${f.url}?download`} download=${f.name}>⬇</a>${f.mine && html`<button class="ghost sm" onClick=${() => confirm(`Remove ${f.name} for everyone?`) && act('library-delete', { id: f.id })}>🗑</button>`}</div>
-        </div>`)}
+    ${!others.length && !mine.length && html`<${Empty} icon="📂"><p>Nobody is sharing a folder yet. Allow one of yours, or ask around.</p><//>`}
+    ${others.map((sh) => html`<${Card} key=${sh.id} title=${`📂 ${sh.name}`} right=${html`<span class="note">${sh.by} · ${sh.files.length} files</span>`}>
+      ${(shr.open.has(sh.id) ? sh.files : sh.files.slice(0, 8)).map((f) => html`<div class="item" key=${f.path}><div class="when">${KIND_ICON[f.kind]}</div><div class="what"><b>${f.path}</b><div class="note">${fmtBytes(f.size)}</div></div><button class="ghost sm" onClick=${() => getFile(sh, f)}>⬇ Get</button></div>`)}
+      ${sh.files.length > 8 && !shr.open.has(sh.id) && html`<p><button class="ghost sm" onClick=${() => { shr.open.add(sh.id); draw(); }}>Show all ${sh.files.length}</button></p>`}
     <//>`)}
+    <p class="warn">Files come from other people's devices as-is; nothing checks them. Photos, music and video can be opened here; open anything else at your own risk.</p>
   </div>`;
 }
 
 const draw = () => {
-  render(html`<${Files} />`, document.getElementById('files'));
+  render(html`<${Shares} />`, document.getElementById('files'));
   render(html`<${Program} />`, document.getElementById('program'));
   render(html`<${People} />`, document.getElementById('people'));
   render(html`<${Games} />`, document.getElementById('games'));
@@ -400,8 +438,7 @@ draw();
 window.addEventListener('pane', draw);
 socket.on('program', (p) => { prog.data = p; draw(); });
 socket.on('games', (g) => { games.data = g; draw(); });
-socket.on('library', (l) => { lib.data = l; draw(); });
-socket.on('library-pending', ({ name, by }) => { toast(`⏳ ${by} uploaded ${name}: approve it in Files`); if (document.hidden) notify(`${by} uploaded ${name}, waiting for approval`); });
+socket.on('shares', (d) => { shr.data = d; draw(); });
 socket.on('channels', () => { if (window.ch?.me && !window.ch.msgs.announcements) socket.emit('channel-history', { id: 'announcements' }, (r) => { if (r.ok) { window.ch.msgs.announcements = r.messages; draw(); } }); draw(); });
 socket.on('channel-msg', ({ channel }) => channel === 'announcements' && draw());
 socket.on('devices', draw); // who is in the room right now, for People
