@@ -1,6 +1,8 @@
 // Files: a shared library on the device hosting the room. Anyone in the room uploads; everyone browses,
 // downloads, and plays music, video and images in place. Nothing here checks what a file is: anything that
-// isn't an image, audio or video is served as a download, never opened by the app, and the page says so. Files live in <data>/library/, with their details in
+// isn't an image, audio or video is served as a download, never opened by the app, and the page says so.
+// Strangers could dump anything, so by default an upload waits for the host's approval before anyone else
+// sees it (policy 'approval'); the host can open sharing to everyone ('open') or keep it to themselves ('host'). Files live in <data>/library/, with their details in
 // library.json. Uploads stream straight to disk (PUT with the file as the body), and downloads are served with
 // range support, so a video seeks without downloading first.
 import fs from 'node:fs';
@@ -16,14 +18,18 @@ const kindOf = (mime, name) => (/^image\//.test(mime) ? 'image' : /^video\//.tes
 export async function startLibrary({ dataDir, app, io, isHost, nameOf, idOf }) {
   const dir = path.join(dataDir, 'library');
   fs.mkdirSync(dir, { recursive: true });
-  const db = await JSONFilePreset(path.join(dataDir, 'library.json'), { files: [], folders: [] });
+  const db = await JSONFilePreset(path.join(dataDir, 'library.json'), { files: [], folders: [], policy: 'approval' });
   const L = db.data;
+  for (const f of L.files) f.status ??= 'ok'; // files from before approvals existed
+  L.policy ??= 'approval';
   let dirty = null;
   const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
   const diskPath = (f) => path.join(dir, `${f.id}${path.extname(f.name).slice(0, 10)}`);
 
+  const canSee = (f, uid) => f.status === 'ok' || f.by === uid || isHost(uid);
   const snapshot = (uid) => ({
-    files: L.files.map((f) => ({ ...f, by: nameOf(f.by), mine: f.by === uid || isHost(uid), url: `/library/${f.id}/${encodeURIComponent(f.name)}` })).sort((a, b) => b.ts - a.ts),
+    policy: L.policy, host: isHost(uid),
+    files: L.files.filter((f) => canSee(f, uid)).map((f) => ({ ...f, by: nameOf(f.by), mine: f.by === uid || isHost(uid), url: `/library/${f.id}/${encodeURIComponent(f.name)}` })).sort((a, b) => b.ts - a.ts),
     free: (() => { try { const s = fs.statfsSync(dir); return s.bavail * s.bsize; } catch { return null; } })(),
   });
   const announce = () => { for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('library', snapshot(s.data.uid)); };
@@ -37,8 +43,9 @@ export async function startLibrary({ dataDir, app, io, isHost, nameOf, idOf }) {
     const name = clean(decodeURIComponent(req.query.name ?? ''), 200) || 'file';
     const size = Number(req.get('content-length')) || 0;
     if (size > MAX_FILE) return res.status(413).json({ ok: false, error: 'Too big (8 GB max)' });
+    if (L.policy === 'host' && !isHost(uid)) return res.status(403).json({ ok: false, error: 'Only the host shares files in this room' });
     const folder = clean(req.query.folder ?? '', 40);
-    const f = { id: id(), name, size, mime: (req.get('content-type') || 'application/octet-stream').split(';')[0], by: uid, ts: Date.now(), folder, kind: kindOf(req.get('content-type') || '', name) };
+    const f = { id: id(), name, size, mime: (req.get('content-type') || 'application/octet-stream').split(';')[0], by: uid, ts: Date.now(), folder, kind: kindOf(req.get('content-type') || '', name), status: L.policy === 'approval' && !isHost(uid) ? 'pending' : 'ok' };
     const out = fs.createWriteStream(diskPath(f));
     let got = 0;
     req.on('data', (c) => { got += c.length; });
@@ -48,8 +55,9 @@ export async function startLibrary({ dataDir, app, io, isHost, nameOf, idOf }) {
       f.size = got;
       L.files.push(f);
       save();
-      res.json({ ok: true, id: f.id });
+      res.json({ ok: true, id: f.id, status: f.status });
       announce();
+      if (f.status === 'pending') for (const s of io.sockets.sockets.values()) if (s.data.uid && isHost(s.data.uid)) s.emit('library-pending', { name: f.name, by: nameOf(uid) });
     });
     out.on('error', () => res.status(500).json({ ok: false, error: 'Could not save the file' }));
     req.on('aborted', () => { out.destroy(); fs.rm(diskPath(f), () => {}); });
@@ -58,7 +66,7 @@ export async function startLibrary({ dataDir, app, io, isHost, nameOf, idOf }) {
   // Streams with range requests (sendFile handles them), inline for media so the browser plays it, download otherwise.
   app.get('/library/:id{/:name}', (req, res) => {
     const f = L.files.find((x) => x.id === req.params.id);
-    if (!f) return res.status(404).send('No such file');
+    if (!f || (f.status !== 'ok' && !(() => { const uid = uidFrom(req) ?? (req.query.key && /^[A-Za-z0-9+/]{43}=$/.test(req.query.key) ? idOf(req.query.key) : null); return uid && canSee(f, uid); })())) return res.status(404).send('No such file');
     res.setHeader('Content-Disposition', `${req.query.download !== undefined || f.kind === 'file' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(f.name)}`);
     // dotfiles: the data folder is ~/.wifiroom, which sendFile would otherwise treat as hidden.
     res.sendFile(diskPath(f), { headers: { 'Content-Type': f.mime }, acceptRanges: true, cacheControl: false, dotfiles: 'allow' }, (err) => { if (err && !res.headersSent) res.status(404).send('Gone'); });
@@ -72,6 +80,20 @@ export async function startLibrary({ dataDir, app, io, isHost, nameOf, idOf }) {
       if (!f || !uid() || !(f.by === uid() || isHost(uid()))) return ack?.({ ok: false, error: 'Only whoever uploaded it, or the host, can remove it' });
       L.files = L.files.filter((x) => x !== f);
       fs.rm(diskPath(f), () => {});
+      save(); ack?.({ ok: true }); announce();
+    });
+    // The host approves what others uploaded; rejecting is the same as deleting.
+    socket.on('library-approve', ({ id: fid } = {}, ack) => {
+      const f = L.files.find((x) => x.id === fid);
+      if (!f || !uid() || !isHost(uid())) return ack?.({ ok: false, error: 'Only the host approves files' });
+      f.status = 'ok';
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('library-policy', ({ policy } = {}, ack) => {
+      if (!uid() || !isHost(uid())) return ack?.({ ok: false, error: 'Only the host changes this' });
+      if (!['approval', 'open', 'host'].includes(policy)) return ack?.({ ok: false, error: 'Unknown policy' });
+      L.policy = policy;
+      if (policy === 'open') for (const f of L.files) f.status = 'ok';
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('library-rename', ({ id: fid, name, folder } = {}, ack) => {

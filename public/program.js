@@ -342,34 +342,43 @@ function uploadFiles(list) {
     xhr.setRequestHeader('x-wifiroom-key', myChatKey());
     xhr.setRequestHeader('content-type', file.type || 'application/octet-stream');
     xhr.upload.onprogress = (e) => { u.done = e.loaded; draw(); };
-    xhr.onload = () => { if (xhr.status !== 200) { u.error = (() => { try { return JSON.parse(xhr.responseText).error; } catch { return `HTTP ${xhr.status}`; } })(); toast(`⚠️ ${file.name}: ${u.error}`); } else { lib.uploads = lib.uploads.filter((x) => x !== u); toast(`📁 ${file.name} is in Files`); } draw(); };
+    xhr.onload = () => { if (xhr.status !== 200) { u.error = (() => { try { return JSON.parse(xhr.responseText).error; } catch { return `HTTP ${xhr.status}`; } })(); toast(`⚠️ ${file.name}: ${u.error}`); } else { lib.uploads = lib.uploads.filter((x) => x !== u); let st = 'ok'; try { st = JSON.parse(xhr.responseText).status; } catch {} toast(st === 'pending' ? `⏳ ${file.name} is waiting for the host's approval` : `📁 ${file.name} is in Files`); } draw(); };
     xhr.onerror = () => { u.error = 'upload failed'; draw(); };
     xhr.send(file);
   }
 }
 function Player({ f }) {
-  const src = f.url;
+  const src = f.status === 'pending' ? `${f.url}?key=${encodeURIComponent(myChatKey())}` : f.url; // a pending file is only served to its uploader and the host
   return html`<div class="player">
     ${f.kind === 'video' ? html`<video src=${src} controls autoplay playsinline />` : f.kind === 'audio' ? html`<audio src=${src} controls autoplay />` : html`<img src=${src} alt=${f.name} />`}
     <div class="row" style="padding:8px"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${f.name}</b><a class="btn ghost" href=${`${src}?download`} download=${f.name}>⬇ Save</a><button class="ghost" onClick=${() => { lib.playing = null; draw(); }}>✕</button></div>
   </div>`;
 }
+const POLICY = { approval: 'Uploads wait for the host to approve them', open: 'Anyone in the room can share files', host: 'Only the host shares files' };
 function Files() {
   if (!me()) return html`<${NamePrompt} />`;
   const d = lib.data;
   if (!d) return html`<${Empty} icon="📁"><p>Loading…</p><//>`;
   const playing = d.files.find((f) => f.id === lib.playing);
-  const groups = [['image', '🖼 Photos'], ['video', '🎬 Videos'], ['audio', '🎵 Music'], ['file', '📄 Other files']].map(([k, t]) => [t, d.files.filter((f) => f.kind === k)]).filter(([, l]) => l.length);
+  const pending = d.files.filter((f) => f.status === 'pending');
+  const shown = d.files.filter((f) => f.status === 'ok');
+  const groups = [['image', '🖼 Photos'], ['video', '🎬 Videos'], ['audio', '🎵 Music'], ['file', '📄 Other files']].map(([k, t]) => [t, shown.filter((f) => f.kind === k)]).filter(([, l]) => l.length);
+  const canUpload = d.policy !== 'host' || d.host;
   const icon = { video: '🎬', audio: '🎵', file: '📄' };
   return html`<div class="files program">
     <div class="row" style="margin-bottom:10px">
-      <label class="btn upbtn">⬆ Upload files<input type="file" multiple onChange=${(e) => { uploadFiles([...e.target.files]); e.target.value = ''; }} /></label>
-      <span class="note" style="flex:1">Shared with everyone in the room, kept on the host device${d.free ? ` · ${fmtBytes(d.free)} free there` : ''}.</span>
+      ${canUpload && html`<label class="btn upbtn">⬆ Upload files<input type="file" multiple onChange=${(e) => { uploadFiles([...e.target.files]); e.target.value = ''; }} /></label>`}
+      <span class="note" style="flex:1">${POLICY[d.policy]}. Kept on the host device${d.free ? ` · ${fmtBytes(d.free)} free there` : ''}.</span>
+      ${d.host && html`<select class="sm" style="width:auto" value=${d.policy} onChange=${(e) => act('library-policy', { policy: e.target.value })}>${Object.entries(POLICY).map(([k, v]) => html`<option value=${k}>${v}</option>`)}</select>`}
     </div>
+    ${pending.length > 0 && html`<${Card} title=${d.host ? `Waiting for your approval · ${pending.length}` : 'Waiting for the host'}>
+      ${pending.map((f) => html`<div class="item" key=${f.id}><div class="when">⏳</div><div class="what"><b>${f.name}</b><div class="note">${fmtBytes(f.size)} · ${f.by} · ${f.kind === 'file' ? 'download only' : f.kind}</div></div>
+        <div class="row">${d.host && f.kind !== 'file' && html`<button class="ghost sm" onClick=${() => { lib.playing = f.id; draw(); }}>👁</button>`}${d.host && html`<button class="sm" onClick=${() => act('library-approve', { id: f.id })}>✓ Approve</button>`}<button class="ghost sm" onClick=${() => confirm(`Remove ${f.name}?`) && act('library-delete', { id: f.id })}>${d.host ? '✗ Reject' : '🗑'}</button></div></div>`)}
+    <//>`}
     <p class="warn">Files are shared as-is by people in this room; nothing checks them. Photos, music and video play here; everything else is download only. Open downloads at your own risk.</p>
     ${lib.uploads.map((u) => html`<div class="item" key=${u.name}><div class="what"><b>${u.name}</b> <span class="note">${u.error ? `⚠️ ${u.error}` : `${fmtBytes(u.done)} of ${fmtBytes(u.size)}`}</span>${!u.error && html`<progress max=${u.size} value=${u.done}></progress>`}</div></div>`)}
     ${playing && html`<${Player} f=${playing} />`}
-    ${!d.files.length && html`<${Empty} icon="📁"><p>Nothing shared yet. Photos, music, a movie, notes: upload and everyone here can open it.</p><//>`}
+    ${!shown.length && !pending.length && html`<${Empty} icon="📁"><p>Nothing shared yet. Photos, music, a movie, notes: upload and everyone here can open it.</p><//>`}
     ${groups.map(([title, list]) => html`<${Card} title=${`${title} · ${list.length}`} key=${title}>
       ${list[0].kind === 'image' ? html`<div class="grid">${list.map((f) => html`<div class="tile" key=${f.id} onClick=${() => { lib.playing = f.id; draw(); }}><img src=${f.url} loading="lazy" alt=${f.name} /><div class="cap">${f.name}</div></div>`)}</div>`
       : list.map((f) => html`<div class="item" key=${f.id}>
@@ -392,6 +401,7 @@ window.addEventListener('pane', draw);
 socket.on('program', (p) => { prog.data = p; draw(); });
 socket.on('games', (g) => { games.data = g; draw(); });
 socket.on('library', (l) => { lib.data = l; draw(); });
+socket.on('library-pending', ({ name, by }) => { toast(`⏳ ${by} uploaded ${name}: approve it in Files`); if (document.hidden) notify(`${by} uploaded ${name}, waiting for approval`); });
 socket.on('channels', () => { if (window.ch?.me && !window.ch.msgs.announcements) socket.emit('channel-history', { id: 'announcements' }, (r) => { if (r.ok) { window.ch.msgs.announcements = r.messages; draw(); } }); draw(); });
 socket.on('channel-msg', ({ channel }) => channel === 'announcements' && draw());
 socket.on('devices', draw); // who is in the room right now, for People
