@@ -20,10 +20,10 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
   // What everyone sees. Votes stay on the host: each person gets the counts plus their own choice.
   const snapshot = (uid) => ({
     title: P.title,
-    schedule: [...P.schedule].sort((a, b) => a.start - b.start),
-    polls: P.polls.map((p) => ({ id: p.id, question: p.question, open: p.open, ts: p.ts, by: nameOf(p.by), total: p.options.reduce((n, o) => n + o.votes.length, 0),
+    schedule: [...P.schedule].sort((a, b) => a.start - b.start).map((i) => ({ ...i, mine: i.by === uid || isHost(uid) })),
+    polls: P.polls.map((p) => ({ id: p.id, question: p.question, open: p.open, ts: p.ts, by: nameOf(p.by), mine: p.by === uid || isHost(uid), total: p.options.reduce((n, o) => n + o.votes.length, 0),
       options: p.options.map((o) => ({ text: o.text, votes: o.votes.length, mine: o.votes.includes(uid) })) })),
-    signups: P.signups.map((s) => ({ id: s.id, title: s.title, max: s.max, people: s.people.map(nameOf), mine: s.people.includes(uid), by: nameOf(s.by) })),
+    signups: P.signups.map((s) => ({ id: s.id, title: s.title, max: s.max, people: s.people.map(nameOf), mine: s.people.includes(uid), by: nameOf(s.by), owner: s.by === uid || isHost(uid) })),
   });
   const announce = () => { for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('program', snapshot(s.data.uid)); };
 
@@ -31,6 +31,8 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
     const uid = () => socket.data.uid;
     const host = () => !!uid() && isHost(uid());
     const deny = (ack) => ack?.({ ok: false, error: 'Only the host can change the program' });
+    const signedIn = (ack) => uid() || (ack?.({ ok: false, error: 'Pick a name first' }), false);
+    const owns = (item) => host() || item?.by === uid(); // edits and deletions: the person who added it, or the host
     socket.on('program-get', (...args) => { const ack = args.find((a) => typeof a === 'function'); if (uid()) ack?.(snapshot(uid())); });
 
     socket.on('program-title', ({ title } = {}, ack) => {
@@ -41,23 +43,25 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
 
     // Schedule items: { id?, title, start, end?, where?, notes? }; with an id, it's an edit.
     socket.on('schedule-save', (item = {}, ack) => {
-      if (!host()) return deny(ack);
+      if (!signedIn(ack)) return;
       const title = clean(item.title, 80), start = when(item.start);
       if (!title || !start) return ack?.({ ok: false, error: 'A title and a start time are needed' });
-      const it = { id: typeof item.id === 'string' && P.schedule.find((x) => x.id === item.id) ? item.id : id(), title, start, end: when(item.end), where: clean(item.where, 60), notes: clean(item.notes, 300) };
+      const old = typeof item.id === 'string' ? P.schedule.find((x) => x.id === item.id) : null;
+      if (old && !owns(old)) return ack?.({ ok: false, error: 'Only whoever added this, or the host, can change it' });
+      const it = { id: old ? old.id : id(), title, start, end: when(item.end), where: clean(item.where, 60), notes: clean(item.notes, 300), by: old ? old.by : uid() };
       const i = P.schedule.findIndex((x) => x.id === it.id);
       i >= 0 ? (P.schedule[i] = it) : P.schedule.push(it);
       if (P.schedule.length > MAX_ITEMS) P.schedule.shift();
       save(); ack?.({ ok: true, id: it.id }); announce();
     });
     socket.on('schedule-delete', ({ id: sid } = {}, ack) => {
-      if (!host()) return deny(ack);
+      if (!owns(P.schedule.find((x) => x.id === sid))) return deny(ack);
       P.schedule = P.schedule.filter((x) => x.id !== sid);
       save(); ack?.({ ok: true }); announce();
     });
 
     socket.on('poll-create', ({ question, options } = {}, ack) => {
-      if (!host()) return deny(ack);
+      if (!signedIn(ack)) return;
       const q = clean(question, 140);
       const opts = (Array.isArray(options) ? options : []).map((o) => clean(o, 60)).filter(Boolean).slice(0, 8);
       if (!q || opts.length < 2) return ack?.({ ok: false, error: 'A question and at least two options' });
@@ -73,20 +77,20 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('poll-close', ({ id: pid, open } = {}, ack) => {
-      if (!host()) return deny(ack);
       const p = P.polls.find((x) => x.id === pid);
+      if (!owns(p)) return deny(ack);
       if (p) p.open = !!open;
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('poll-delete', ({ id: pid } = {}, ack) => {
-      if (!host()) return deny(ack);
+      if (!owns(P.polls.find((x) => x.id === pid))) return deny(ack);
       P.polls = P.polls.filter((x) => x.id !== pid);
       save(); ack?.({ ok: true }); announce();
     });
 
     // Sign-up sheets: "Karaoke slot 9pm (max 6)".
     socket.on('signup-create', ({ title, max } = {}, ack) => {
-      if (!host()) return deny(ack);
+      if (!signedIn(ack)) return;
       const t = clean(title, 80);
       if (!t) return ack?.({ ok: false, error: 'Give it a title' });
       P.signups.unshift({ id: id(), title: t, max: Number.isInteger(max) && max > 0 ? Math.min(max, 500) : null, people: [], by: uid() });
@@ -102,7 +106,7 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('signup-delete', ({ id: sid } = {}, ack) => {
-      if (!host()) return deny(ack);
+      if (!owns(P.signups.find((x) => x.id === sid))) return deny(ack);
       P.signups = P.signups.filter((x) => x.id !== sid);
       save(); ack?.({ ok: true }); announce();
     });

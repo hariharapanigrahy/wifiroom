@@ -116,7 +116,59 @@ const chess = {
   },
 };
 
-const TYPES = { chess, quiz, likely };
+// ---- Ludo: 2–4 seats, four tokens each. Positions are relative to a player's own start: -1 in base,
+// 0–50 on the track, 51–55 the home column, 56 home. Seat 0 is red, then green, yellow, blue.
+const LUDO = { START: [0, 13, 26, 39], SAFE: [0, 8, 13, 21, 26, 34, 39, 47], HOME: 56 };
+const ludo = {
+  name: 'Ludo', icon: '🎲', min: 2, max: 4,
+  create: () => ({ turn: 0, die: null, phase: 'roll', tokens: {}, locked: false, result: null, log: [], sixes: 0 }),
+  abs: (seat, p) => (LUDO.START[seat] + p) % 52,
+  movable(g, s, uid, die) {
+    const seat = g.players.indexOf(uid), t = s.tokens[uid];
+    return t.map((p, i) => ({ p, i })).filter(({ p }) => (p === -1 ? die === 6 : p + die <= LUDO.HOME)).map(({ i }) => i);
+  },
+  step(g, s, uid, action, data) {
+    if (s.result) return;
+    for (const p of g.players) s.tokens[p] ??= [-1, -1, -1, -1];
+    const seat = g.players.indexOf(uid);
+    if (seat < 0 || seat !== s.turn) return;
+    const next = () => { s.turn = (s.turn + 1) % g.players.length; s.die = null; s.phase = 'roll'; s.sixes = 0; };
+    if (action === 'roll' && s.phase === 'roll') {
+      s.locked = true;
+      s.die = 1 + Math.floor(Math.random() * 6);
+      s.phase = 'move';
+      const can = ludo.movable(g, s, uid, s.die);
+      if (!can.length) { s.log.push(`${g.names[uid]} rolled ${s.die}, no move`); next(); return; }
+      if (can.length === 1) ludo.step(g, s, uid, 'move', { token: can[0] });
+      return;
+    }
+    if (action === 'move' && s.phase === 'move' && Number.isInteger(data?.token)) {
+      const i = data.token, t = s.tokens[uid];
+      if (!ludo.movable(g, s, uid, s.die).includes(i)) return;
+      const from = t[i];
+      t[i] = from === -1 ? 0 : from + s.die;
+      let again = s.die === 6;
+      if (t[i] <= 50) {
+        const at = ludo.abs(seat, t[i]);
+        if (!LUDO.SAFE.includes(at)) for (const other of g.players) {
+          if (other === uid) continue;
+          const os = g.players.indexOf(other);
+          s.tokens[other].forEach((op, oi) => { if (op >= 0 && op <= 50 && ludo.abs(os, op) === at) { s.tokens[other][oi] = -1; again = true; s.log.push(`${g.names[uid]} captured ${g.names[other]}`); } });
+        }
+      }
+      if (t[i] === LUDO.HOME) { again = true; s.log.push(`${g.names[uid]} got a token home`); }
+      if (t.every((p) => p === LUDO.HOME)) { s.result = { winner: uid }; s.phase = 'done'; s.die = null; g.award(uid, 3); s.log.push(`${g.names[uid]} wins!`); return; }
+      s.log = s.log.slice(-6);
+      if (again) { s.sixes = s.die === 6 ? s.sixes + 1 : 0; s.die = null; s.phase = 'roll'; if (s.sixes >= 3) next(); } else next();
+    }
+  },
+  view(s, uid, g) {
+    const seat = g.players.indexOf(uid);
+    return { ...s, seat, mine: seat === s.turn, movable: seat === s.turn && s.phase === 'move' && s.tokens[uid] ? ludo.movable(g, s, uid, s.die) : [] };
+  },
+};
+
+const TYPES = { chess, ludo, quiz, likely };
 
 export async function startGames({ dataDir, io, isHost, nameOf }) {
   const db = await JSONFilePreset(path.join(dataDir, 'games.json'), { scores: {}, games: [] });
@@ -124,7 +176,7 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
   let dirty = null;
   const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
 
-  const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), created: g.created, ended: g.ended,
+  const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), byId: g.by, runs: g.by === uid || isHost(uid), created: g.created, ended: g.ended,
     players: g.players.map((p) => ({ id: p, name: nameOf(p) })), joined: g.players.includes(uid), seats: TYPES[g.type].max ?? null,
     state: TYPES[g.type].view ? TYPES[g.type].view(g.state, uid, g) : g.state });
   const snapshot = (uid) => ({
@@ -139,8 +191,10 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
     const host = () => !!uid() && isHost(uid());
     const find = (gid) => D.games.find((g) => g.id === gid && !g.ended);
 
+    // Anyone can start a game; whoever starts it runs it (asks, judges, ends), as can the room's host.
+    const runs = (g) => host() || g.by === uid();
     socket.on('game-create', ({ type, title } = {}, ack) => {
-      if (!host()) return ack?.({ ok: false, error: 'Only the host starts games' });
+      if (!uid()) return ack?.({ ok: false, error: 'Pick a name first' });
       if (!TYPES[type]) return ack?.({ ok: false, error: 'Unknown game' });
       const g = { id: id(), type, title: clean(title, 60) || TYPES[type].name, by: uid(), created: Date.now(), ended: null, players: [], state: TYPES[type].create() };
       D.games.unshift(g);
@@ -153,6 +207,7 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
       const max = TYPES[g.type].max;
       if (!g.players.includes(uid())) {
         if (max && g.players.length >= max) return ack?.({ ok: false, error: 'All seats are taken' });
+        if (g.state.locked) return ack?.({ ok: false, error: 'This game has started' });
         g.players.push(uid());
       }
       save(); ack?.({ ok: true }); announce();
@@ -162,13 +217,13 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
       if (!me || !g) return ack?.({ ok: false, error: 'That game is over' });
       if (!g.players.includes(me) && !host()) return ack?.({ ok: false, error: 'Join the game first' });
       if (TYPES[g.type].min && g.players.length < TYPES[g.type].min) return ack?.({ ok: false, error: `Needs ${TYPES[g.type].min} players` });
-      const api = { players: g.players, award: (who, n) => { D.scores[who] = (D.scores[who] ?? 0) + n; } };
-      TYPES[g.type].step(api, g.state, me, String(action), data, host());
+      const api = { players: g.players, names: Object.fromEntries(g.players.map((p) => [p, nameOf(p)])), award: (who, n) => { D.scores[who] = (D.scores[who] ?? 0) + n; } };
+      TYPES[g.type].step(api, g.state, me, String(action), data, runs(g));
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('game-end', ({ id: gid } = {}, ack) => {
-      if (!host()) return ack?.({ ok: false, error: 'Only the host ends games' });
       const g = find(gid);
+      if (!g || !runs(g)) return ack?.({ ok: false, error: 'Only whoever started the game, or the host, can end it' });
       if (g) g.ended = Date.now();
       save(); ack?.({ ok: true }); announce();
     });
@@ -184,3 +239,4 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
 
   return { attach, announce };
 }
+export { TYPES }; // for tests

@@ -145,7 +145,15 @@
     .chess .sq.last { box-shadow: inset 0 0 0 100px #f2b84b55; }
     .chess .sq.sel { box-shadow: inset 0 0 0 100px #6fcf9788; }
     .chess .sq.target { box-shadow: inset 0 0 0 100px #6fcf9755; }
+    .chess .pw { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000; } .chess .pb { color: #111; text-shadow: 0 0 2px #fff8; }
     .chess .sq.target:empty::after { content: ''; width: 28%; height: 28%; border-radius: 50%; background: #1b142099; }
+
+    .ludo .lboard { position: relative; display: grid; grid-template-columns: repeat(15, 1fr); width: min(100%, 480px); aspect-ratio: 1; border: 3px solid #000; border-radius: 4px; margin: 8px 0; user-select: none; }
+    .ludo .lc { aspect-ratio: 1; border: 1px solid #0002; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #0006; }
+    .ludo .tok { position: absolute; width: 5.2%; height: 5.2%; border-radius: 50%; border: 2px solid #000; transform: translate(-50%, -50%); box-shadow: 0 2px 0 #0008; }
+    .ludo .tok.can { cursor: pointer; animation: pulse .8s infinite alternate; border-color: #fff; }
+    @keyframes pulse { from { transform: translate(-50%, -50%) scale(1); } to { transform: translate(-50%, -50%) scale(1.3); } }
+    .ludo .roll { font-size: 18px; padding: 10px 18px; } .ludo .die { font-size: 34px; line-height: 1; }
 
     /* ---- overlays ---- */
     #call-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #1f3a2a; border-bottom: 2px solid var(--trust); }
