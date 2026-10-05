@@ -406,9 +406,13 @@ io.on('connection', async (socket) => {
 
   // Calls and file transfers connect browsers directly (WebRTC). This passes their connection setup along,
   // sealed with the same keys as chats, so the room can't read it or put itself in the middle.
+  // Browsers send their connection candidates in a burst, so this is capped per second rather than spaced out.
+  let signals = { at: 0, n: 0 };
   socket.on('signal', ({ to, nonce, box } = {}) => {
     const d = actor(), target = devices.get(to);
-    if (!d || !target || target.id === d.id || typeof nonce !== 'string' || typeof box !== 'string' || box.length > 20000 || !allow('signal', 20)) return;
+    const now = Date.now();
+    if (now - signals.at > 1000) signals = { at: now, n: 0 };
+    if (!d || !target || target.id === d.id || typeof nonce !== 'string' || typeof box !== 'string' || box.length > 20000 || ++signals.n > 200) return;
     const room = chatRoomOf(target);
     if (room) io.to(room).emit('signal', { from: d.id, nonce, box });
   });

@@ -12,7 +12,10 @@ const hex = (n) => [...nacl.randomBytes(n)].map((b) => b.toString(16).padStart(2
 const chatRef = (chat) => ({ id: chat.id, kind: chat.kind, name: chat.name, members: chat.members });
 const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(0)} KB` : n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(1)} MB` : `${(n / 1024 ** 3).toFixed(2)} GB`);
 const canCall = () => !!navigator.mediaDevices?.getUserMedia && !!window.RTCPeerConnection;
-const NO_MIC = 'Calls need the WiFiRoom app or a laptop: browsers only allow the microphone on secure pages, and the room is plain http on your Wi-Fi.';
+// Browsers allow the microphone only on https or localhost, and the room is plain http on the Wi-Fi.
+const NO_MIC = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+  ? 'This browser blocks the microphone.'
+  : `Calls need the room open at localhost, not ${location.hostname}: on the host computer use http://localhost:${location.port || 80}, on another laptop run "npx wifiroom" (it opens the room that way), or use the WiFiRoom app.`;
 
 // ---- connection setup, sealed for one person ----
 function signal(to, msg) {
@@ -46,7 +49,12 @@ function peer(id) {
   pc.onicecandidate = ({ candidate }) => candidate && signal(id, { ice: candidate });
   pc.ondatachannel = ({ channel }) => receiveChannel(id, channel);
   pc.ontrack = ({ streams }) => hear(id, p, streams[0]);
-  pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') { pc.close(); if (call?.joined.has(id)) addCallNote(`⚠️ Lost the call connection to ${personName(id)}.`); } };
+  pc.onconnectionstatechange = () => {
+    console.log('WebRTC', personName(id), pc.connectionState);
+    if (pc.connectionState === 'failed') { pc.close(); if (call?.joined.has(id)) addCallNote(`⚠️ No direct connection to ${personName(id)}: this Wi-Fi keeps the two devices apart.`); }
+    if (call?.joined.has(id)) renderCall();
+  };
+  pc.oniceconnectionstatechange = () => { console.log('ICE', personName(id), pc.iceConnectionState); if (call?.joined.has(id)) renderCall(); };
   return p;
 }
 
@@ -173,7 +181,8 @@ function onP2p(from, chat, p) {
   }
   if (p.t === 'call') return incomingCall(from, chat, p.call);
   if (!call || p.call !== call.id) return;
-  if (p.t === 'call-join') { call.joined.add(from); addCallNote(`${personName(from)} joined the call.`); speakTo(peer(from)); renderCall(); }
+  if (p.t === 'call-join') { call.joined.add(from); addCallNote(`${personName(from)} joined the call.`); connectCall(from, chat); }
+  if (p.t === 'call-here' && !call.joined.has(from)) { call.joined.add(from); connectCall(from, chat); }
   if (p.t === 'call-leave') { leftCall(from); addCallNote(`${personName(from)} left the call.`); }
   if (p.t === 'call-decline') addCallNote(`${personName(from)} can't talk right now.`);
 }
@@ -232,6 +241,14 @@ async function startCall(chat) {
 
 function incomingCall(from, chat, id) {
   if (typeof id !== 'string' || !/^[0-9a-f]{16}$/.test(id)) return;
+  // Both people dialed each other: the call with the smaller id wins, and the other side joins it.
+  if (call && call.chatId === chat.id && !call.joined.size) {
+    if (id > call.id) return sendPayload(chat, { t: 'call', chat: chatRef(chat), call: call.id }); // they join ours; tell them again in case they missed it
+    call.id = id;
+    call.joined.add(from);
+    sendPayload(chat, { t: 'call-join', chat: chatRef(chat), call: id });
+    return connectCall(from, chat);
+  }
   if (call) return sendPayload(chat, { t: 'call-decline', chat: chatRef(chat), call: id });
   addMsg(chat, { system: true, text: `📞 ${personName(from)} called.`, ts: Date.now() }, { unread: true });
   const answer = async (yes) => {
@@ -241,8 +258,7 @@ function incomingCall(from, chat, id) {
     if (!stream) return sendPayload(chat, { t: 'call-decline', chat: chatRef(chat), call: id });
     call = { id, chatId: chat.id, stream, joined: new Set([from]), muted: false };
     sendPayload(chat, { t: 'call-join', chat: chatRef(chat), call: id });
-    speakTo(peer(from));
-    renderCall();
+    connectCall(from, chat);
   };
   const box = el('div', { className: 'card' }, el('strong', { textContent: `📞 ${personName(from)} is calling${chat.kind === 'group' ? ` ${chatName(chat)}` : ''}` }),
     el('div', { className: 'row', style: 'margin-top:8px' }, btn('Answer', () => answer(true)), btn('Decline', () => answer(false), 'ghost')));
@@ -251,6 +267,15 @@ function incomingCall(from, chat, id) {
   const ringer = setInterval(() => navigator.vibrate?.([400, 200, 400]), 1500);
   setTimeout(() => { if (box.isConnected) { box.remove(); clearInterval(ringer); } }, 30_000);
   if (document.hidden) notify(`${personName(from)} is calling`);
+}
+
+// Exactly one side starts each connection, so two offers never cross: the smaller id adds its voice and
+// offers, and the other side adds its voice in the answer (see the signal handler). The waiting side says
+// "I'm here" so a newcomer to a group call knows to offer to it.
+function connectCall(id, chat) {
+  if (myId() < id) speakTo(peer(id));
+  else sendPayload(chat, { t: 'call-here', chat: chatRef(chat), call: call.id });
+  renderCall();
 }
 
 function speakTo(p) {
@@ -299,7 +324,9 @@ function renderCall() {
     call.stream.getAudioTracks().forEach((t) => { t.enabled = !call.muted; });
     renderCall();
   }, 'ghost');
-  const who = call.joined.size ? [...call.joined].map(personName).join(', ') : 'Calling…';
+  // How each person's direct connection is doing, so a silent call shows where it stops.
+  const LINK = { new: '…', connecting: 'connecting…', connected: '🟢', disconnected: 'reconnecting…', failed: '⚠️ no direct route', closed: '⚠️ no direct route' };
+  const who = call.joined.size ? [...call.joined].map((id) => `${personName(id)} ${LINK[peers.get(id)?.pc.connectionState ?? 'new']}`).join(', ') : 'Calling…';
   document.body.append(el('div', { id: 'call-bar' }, el('span', { textContent: `📞 ${chat ? chatName(chat) : 'Call'} · ${who}` }), mute, btn('Hang up', hangUp)));
 }
 window.addEventListener('pagehide', hangUp);
