@@ -283,7 +283,7 @@ function renderConversation() {
 $('chats-back').onclick = () => openChats();
 $('chats-attach').onclick = () => $('chats-file').click();
 $('chats-file').onchange = () => { const chat = chats[view.chatId]; if (chat) shareFiles(chat, [...$('chats-file').files]); $('chats-file').value = ''; };
-$('chats-call').onclick = () => { const chat = chats[view.chatId]; if (chat) startCall(chat); };
+$('chats-call').onclick = () => { if (view.screen === 'channel') return joinChannelCall(view.chatId); const chat = chats[view.chatId]; if (chat) startCall(chat); };
 $('chats-form').onsubmit = (e) => { e.preventDefault(); (view.screen === 'channel' ? sendToChannel(view.chatId, $('chats-text').value) : send($('chats-text').value)); $('chats-text').value = ''; $('chats-text').focus(); hideSuggest(); };
 // While typing in a channel: a typing signal, and @name suggestions after an "@".
 $('chats-text').addEventListener('input', () => {

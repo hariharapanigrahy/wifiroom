@@ -47,11 +47,26 @@ export async function startChannels({ dataDir, io }) {
   const lastRead = (uid, cid) => users[uid]?.read?.[cid] ?? 0;
   const unreadIn = (ch, uid) => { const since = lastRead(uid, ch.id); let n = 0, mention = false; for (const m of messages[ch.id] ?? []) if (m.ts > since && m.from !== uid && !m.deleted) { n++; if (m.mentions?.includes(uid)) mention = true; } return { n, mention }; };
   const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: EVERYONE.includes(ch.id) ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false,
-    lastRead: lastRead(uid, ch.id), ...(isMember(ch, uid) ? { unread: unreadIn(ch, uid).n, mention: unreadIn(ch, uid).mention } : {}), pinned: (messages[ch.id] ?? []).filter((m) => m.pinned && !m.deleted).slice(-5) });
+    lastRead: lastRead(uid, ch.id), ...(isMember(ch, uid) ? { unread: unreadIn(ch, uid).n, mention: unreadIn(ch, uid).mention } : {}), pinned: (messages[ch.id] ?? []).filter((m) => m.pinned && !m.deleted).slice(-5), call: callView(ch.id) });
   const listFor = (uid) => Object.values(channels).filter((ch) => canSee(ch, uid)).map((ch) => view(ch, uid));
   const room = (cid) => `ch:${cid}`;
   const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host, tag: id.slice(0, 4), banned: !!u.banned }]));
   const online = new Map(); // uid -> count of open pages
+
+  // One voice call per channel, kept only while it runs: who is in it (one device each), who the host muted,
+  // who is talking. The voices go browser to browser (p2p.js); this is just the roster.
+  const calls = {}; // cid -> { by, started, members: { uid: { dev, sid, muted, talking, since } } }
+  const callView = (cid) => { const c = calls[cid]; return c ? { by: c.by, started: c.started, members: Object.entries(c.members).map(([uid, m]) => ({ uid, dev: m.dev, muted: m.muted, talking: m.talking, since: m.since })) } : null; };
+  const tellCall = (cid) => io.to(room(cid)).emit('channel-call', { channel: cid, call: callView(cid) });
+  const dropFromCalls = (sid) => {
+    for (const [cid, c] of Object.entries(calls)) {
+      const gone = Object.entries(c.members).filter(([, m]) => m.sid === sid).map(([uid]) => uid);
+      if (!gone.length) continue;
+      for (const uid of gone) delete c.members[uid];
+      if (!Object.keys(c.members).length) { delete calls[cid]; if (channels[cid]) post(channels[cid], { system: true, text: '📞 The call ended.' }); }
+      tellCall(cid);
+    }
+  };
 
   // Everyone's channel list and the people list, after anything that changes them.
   const listeners = [];
@@ -93,6 +108,7 @@ export async function startChannels({ dataDir, io }) {
       n > 0 ? online.set(uid, n) : online.delete(uid);
       if (users[uid]) users[uid].seen = Date.now();
       socket.data.uid = null;
+      dropFromCalls(socket.id);
     };
     socket.on('disconnect', () => { leaveAll(); save(); announce(); });
 
@@ -262,6 +278,44 @@ export async function startChannels({ dataDir, io }) {
       if (!uid || !ch || !isMember(ch, uid) || Date.now() - typedAt < 1500) return;
       typedAt = Date.now();
       socket.to(room(ch.id)).emit('channel-typing', { channel: ch.id, uid, name: users[uid].name });
+    });
+
+    // ---- channel calls ----
+    // `dev` is the device id p2p.js signals by; a visitor's must be the device their socket joined as.
+    socket.on('channel-call-join', ({ id, dev } = {}, ack) => {
+      const uid = me(), ch = chan(id);
+      if (!uid || !ch || !isMember(ch, uid)) return ack?.({ ok: false, error: 'Join the channel first' });
+      if (typeof dev !== 'string' || dev.length > 40 || (!isHost && dev !== socket.data.deviceId)) return ack?.({ ok: false, error: 'Open the room page first' });
+      dropFromCalls(socket.id); // one call at a time
+      const c = (calls[ch.id] ??= { by: uid, started: Date.now(), members: {} });
+      if (!Object.keys(c.members).length) post(ch, { system: true, text: `📞 ${users[uid].name} started a call.` });
+      c.members[uid] = { dev, sid: socket.id, muted: false, talking: false, since: Date.now() };
+      ack?.({ ok: true, call: callView(ch.id) });
+      tellCall(ch.id); announce();
+    });
+    socket.on('channel-call-leave', ({ id } = {}, ack) => {
+      const uid = me(), c = calls[id];
+      if (uid && c?.members[uid]) { delete c.members[uid]; if (!Object.keys(c.members).length) { delete calls[id]; post(channels[id], { system: true, text: '📞 The call ended.' }); } tellCall(id); announce(); }
+      ack?.({ ok: true });
+    });
+    // Mute: your own flag, or (host) everyone's. The host's mute is a nudge, people can unmute themselves.
+    socket.on('channel-call-mute', ({ id, muted, all } = {}, ack) => {
+      const uid = me(), c = calls[id];
+      if (!uid || !c?.members[uid]) return ack?.({ ok: false });
+      if (all) {
+        if (!users[uid].host) return ack?.({ ok: false, error: 'Only the host' });
+        for (const [who, m] of Object.entries(c.members)) if (who !== uid) m.muted = true;
+        io.to(room(id)).emit('channel-call-hush', { channel: id, by: users[uid].name });
+      } else c.members[uid].muted = !!muted;
+      ack?.({ ok: true }); tellCall(id);
+    });
+    let talkedAt = 0;
+    socket.on('channel-talking', ({ id, on } = {}) => {
+      const uid = me(), c = calls[id];
+      if (!uid || !c?.members[uid] || Date.now() - talkedAt < 200) return;
+      talkedAt = Date.now();
+      c.members[uid].talking = !!on;
+      io.to(room(id)).emit('channel-talking', { channel: id, uid, on: !!on });
     });
 
     // Older messages, newest page first; `before` is a message timestamp.

@@ -134,7 +134,7 @@ function channelSection() {
   }
   const row = (c) => el('button', { className: `chat-row${view.chatId === c.id ? ' on' : ''}`, type: 'button', onclick: () => openChannel(c.id) },
     el('span', {}, isPublic(c) ? '#' : '🔒'),
-    el('span', { className: 'who' }, c.name, el('div', { textContent: c.topic || `${c.members.length} people${c.joined ? '' : ' · tap to join'}` })),
+    el('span', { className: 'who' }, c.name, el('div', { textContent: c.call?.members.length ? `📞 ${c.call.members.length} on a call · ${c.call.members.map((m) => nameOfUid(m.uid)).join(', ')}` : c.topic || `${c.members.length} people${c.joined ? '' : ' · tap to join'}` })),
     el('span', { className: `badge${c.mention ? ' at' : ''}`, textContent: ch.unread[c.id] ? (c.mention ? '@' : '') + ch.unread[c.id] : '' }));
   const pub = ch.list.filter(isPublic).sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.last - a.last));
   const priv = ch.list.filter((c) => !isPublic(c)).sort((a, b) => b.last - a.last);
@@ -184,7 +184,11 @@ function channelScreen(body, sub, back, form) {
   if (!c) { view.screen = 'list'; return renderChats(); }
   $('chats-title').textContent = `${isPublic(c) ? '#' : '🔒'} ${c.name}`;
   back.style.display = form.style.display = '';
-  $('chats-call').style.display = 'none'; // calls per channel come later
+  // The channel's call: join it, or start one. Once in it, the call bar at the top has the controls.
+  const inThis = call?.channel === c.id, n = c.call?.members.length ?? 0;
+  $('chats-call').style.display = inThis ? 'none' : '';
+  $('chats-call').textContent = n ? `📞 Join (${n})` : '📞';
+  $('chats-call').title = n ? 'Join the call' : 'Start a call in this channel';
   const members = c.members.map(nameOfUid).join(', ');
   const tools = el('details', {}, el('summary', { textContent: `${c.members.length} people${c.topic ? ` · ${c.topic}` : ''}` }), el('p', { className: 'note', textContent: members }));
   const invitable = Object.entries(ch.people).filter(([id]) => !c.members.includes(id));
@@ -195,13 +199,14 @@ function channelScreen(body, sub, back, form) {
   }
   if (c.id !== 'general') tools.append(el('p', {}, btn('Leave', () => socket.emit('channel-leave', { id: c.id }, (r) => { if (r.ok) { delete ch.msgs[c.id]; openChats(); } else toast(`⚠️ ${r.error}`); }), 'ghost')));
   sub.replaceChildren(tools);
+  if (n) tools.before(el('p', { className: 'oncall' }, el('span', { textContent: `📞 ${c.call.members.map((m) => `${m.muted ? '🔇 ' : ''}${nameOfUid(m.uid)}`).join(', ')}` }), ...(inThis ? [] : [btn('Join', () => joinChannelCall(c.id), 'sm')])));
   if (c.pinned?.length) tools.before(el('details', { className: 'pins' }, el('summary', { textContent: `📌 ${c.pinned.length} pinned` }), ...c.pinned.map((m) => el('p', { className: 'note', textContent: `${nameOfUid(m.from)}: ${m.text}` }))));
   const list = ch.msgs[c.id] ?? [];
   const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
   let divider = false;
   const rows = [];
   for (const m of list) {
-    if (!divider && ch.openedAt && m.ts > ch.openedAt && m.from !== ch.me) { divider = true; rows.push(el('div', { className: 'newline', textContent: 'new messages' })); }
+    if (!divider && ch.openedAt && m.ts > ch.openedAt && !m.system && m.from !== ch.me) { divider = true; rows.push(el('div', { className: 'newline', textContent: 'new messages' })); }
     if (m.system) { rows.push(el('div', { className: 'msg system', textContent: m.text })); continue; }
     if (m.deleted) { rows.push(el('div', { className: 'msg system', textContent: `${nameOfUid(m.from)} deleted a message` })); continue; }
     const mine = m.from === ch.me, mentionsMe = m.mentions?.includes(ch.me);

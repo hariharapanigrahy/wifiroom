@@ -6,7 +6,7 @@ const CHUNK = 60 * 1024;
 const MAX_FILE = 200 * 1024 * 1024; // kept in memory until saved
 const peers = new Map(); // deviceId -> { pc, polite, making, ignore, sender, audio }
 const files = new Map(); // fileId -> { meta, url, mine, targets, done, failed, sending, from, key, parts, got }
-let call = null;         // { id, chatId, stream, joined: Set<deviceId>, muted }
+let call = null;         // { id, chatId | channel, stream, joined: Set<deviceId>, muted, talking: Set<uid> }
 
 const hex = (n) => [...nacl.randomBytes(n)].map((b) => b.toString(16).padStart(2, '0')).join('');
 const chatRef = (chat) => ({ id: chat.id, kind: chat.kind, name: chat.name, members: chat.members });
@@ -71,7 +71,7 @@ socket.on('signal', async ({ from, nonce, box }) => {
       await pc.setRemoteDescription(msg.sdp);
       if (msg.sdp.type === 'offer') {
         // Someone in our call connecting (in a group, people already talking reach each newcomer): answer with our voice.
-        if (call && chats[call.chatId]?.members.includes(from) && msg.call === call.id) { call.joined.add(from); speakTo(p); renderCall(); }
+        if (call && msg.call === call.id && inCall(from)) { call.joined.add(from); speakTo(p); renderCall(); }
         await pc.setLocalDescription();
         signal(from, { sdp: pc.localDescription, call: call?.id });
       }
@@ -307,12 +307,90 @@ function hangUp() {
   if (!call) return;
   const chat = chats[call.chatId];
   if (chat) sendPayload(chat, { t: 'call-leave', chat: chatRef(chat), call: call.id });
+  if (call.channel) socket.emit('channel-call-leave', { id: call.channel });
   for (const id of [...peers.keys()]) leftCall(id);
   call.stream.getTracks().forEach((t) => t.stop());
-  addCallNote('📞 You left the call.');
+  stopMeter();
+  if (chat) addCallNote('📞 You left the call.');
   call = null;
   renderCall();
+  renderChats();
 }
+
+// Who may be in the call we're in: the chat's members, or whoever the host lists for the channel call.
+const inCall = (dev) => !!call && (call.channel ? call.members.includes(dev) : !!chats[call.chatId]?.members.includes(dev));
+const devOfUid = (uid) => [...state.devices.values()].find((d) => d.uid === uid && d.chatKey)?.id;
+
+// ---- channel calls: the host keeps the roster (channels.js); voices still go browser to browser ----
+// The device with the smaller id offers to each newcomer; the other side adds its voice in the answer.
+async function joinChannelCall(cid) {
+  if (call) return toast('You are already in a call');
+  const stream = await mic();
+  if (!stream) return;
+  socket.emit('channel-call-join', { id: cid, dev: myId() }, (r) => {
+    if (!r?.ok) { stream.getTracks().forEach((t) => t.stop()); return toast(`⚠️ ${r?.error ?? 'Could not join'}`); }
+    call = { id: `ch:${cid}`, channel: cid, stream, joined: new Set(), members: [], muted: false, talking: new Set() };
+    syncChannelCall(r.call);
+    startMeter(cid);
+    renderCall(); renderChats();
+  });
+}
+socket.on('channel-call', ({ channel, call: c }) => {
+  if (call?.channel === channel) syncChannelCall(c);
+  const item = ch.list.find((x) => x.id === channel);
+  if (item) item.call = c;
+  renderChats();
+});
+function syncChannelCall(c) {
+  if (!call?.channel) return;
+  const mine = c?.members.find((m) => m.uid === ch.me);
+  if (!mine || mine.dev !== myId()) { // the host dropped us, or this identity joined from another device
+    call.members = []; for (const id of [...call.joined]) leftCall(id);
+    call.stream.getTracks().forEach((t) => t.stop()); stopMeter(); call = null; renderCall(); return;
+  }
+  if (mine.muted && !call.muted) setMuted(true);
+  call.members = c.members.filter((m) => m.uid !== ch.me).map((m) => m.dev);
+  call.roster = c.members;
+  for (const dev of call.members) if (!call.joined.has(dev)) { call.joined.add(dev); if (myId() < dev) speakTo(peer(dev)); }
+  for (const dev of [...call.joined]) if (!call.members.includes(dev)) leftCall(dev);
+  renderCall();
+}
+socket.on('channel-talking', ({ channel, uid, on }) => {
+  if (call?.channel !== channel) return;
+  on ? call.talking.add(uid) : call.talking.delete(uid);
+  renderCall();
+});
+socket.on('channel-call-hush', ({ channel, by }) => { if (call?.channel === channel && !ch.host) toast(`🔇 ${by} muted everyone`); });
+
+function setMuted(muted) {
+  call.muted = muted;
+  call.stream.getAudioTracks().forEach((t) => { t.enabled = !muted; });
+  if (call.channel) socket.emit('channel-call-mute', { id: call.channel, muted });
+  renderCall();
+}
+
+// A level meter on our own microphone, so the others see who is talking.
+let meter = null;
+function startMeter(cid) {
+  if (!window.AudioContext) return;
+  try {
+    const ctx = new AudioContext(), src = ctx.createMediaStreamSource(call.stream), an = ctx.createAnalyser();
+    an.fftSize = 512; src.connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    let on = false, quietSince = 0;
+    const timer = setInterval(() => {
+      if (!call) return stopMeter();
+      an.getByteTimeDomainData(buf);
+      let sum = 0; for (const v of buf) { const d = (v - 128) / 128; sum += d * d; }
+      const loud = !call.muted && Math.sqrt(sum / buf.length) > 0.02;
+      if (loud) quietSince = 0; else quietSince ||= Date.now();
+      const now = loud || (quietSince && Date.now() - quietSince < 600);
+      if (now !== on) { on = now; socket.emit('channel-talking', { id: cid, on }); on ? call.talking.add(ch.me) : call.talking.delete(ch.me); renderCall(); }
+    }, 150);
+    meter = { ctx, timer };
+  } catch (e) { console.warn('meter', e); }
+}
+function stopMeter() { if (!meter) return; clearInterval(meter.timer); meter.ctx.close().catch(() => {}); meter = null; }
 
 function addCallNote(text) {
   const chat = call && chats[call.chatId];
@@ -323,15 +401,19 @@ function renderCall() {
   $('call-bar')?.remove();
   if (!call) return;
   const chat = chats[call.chatId];
-  const mute = btn(call.muted ? '🔇 Unmute' : '🎙️ Mute', () => {
-    call.muted = !call.muted;
-    call.stream.getAudioTracks().forEach((t) => { t.enabled = !call.muted; });
-    renderCall();
-  }, 'ghost');
+  const mute = btn(call.muted ? '🔇 Unmute' : '🎙️ Mute', () => setMuted(!call.muted), 'ghost');
   // How each person's direct connection is doing, so a silent call shows where it stops.
   const LINK = { new: '…', connecting: 'connecting…', connected: '🟢', disconnected: 'reconnecting…', failed: '⚠️ no direct route', closed: '⚠️ no direct route' };
-  const who = call.joined.size ? [...call.joined].map((id) => `${personName(id)} ${LINK[peers.get(id)?.pc.connectionState ?? 'new']}`).join(', ') : 'Calling…';
-  document.body.append(el('div', { id: 'call-bar' }, el('span', { textContent: `📞 ${chat ? chatName(chat) : 'Call'} · ${who}` }), mute, btn('Hang up', hangUp)));
+  const linkOf = (id) => LINK[peers.get(id)?.pc.connectionState ?? 'new'];
+  let who;
+  if (call.channel) {
+    const uidOf = (dev) => call.roster?.find((m) => m.dev === dev)?.uid;
+    const tag = (uid) => `${call.talking.has(uid) ? '🗣️ ' : ''}${call.roster?.find((m) => m.uid === uid)?.muted ? '🔇 ' : ''}`;
+    who = [`${tag(ch.me)}You`, ...[...call.joined].map((id) => `${tag(uidOf(id))}${nameOfUid(uidOf(id))} ${linkOf(id)}`)].join(', ');
+  } else who = call.joined.size ? [...call.joined].map((id) => `${personName(id)} ${linkOf(id)}`).join(', ') : 'Calling…';
+  const title = call.channel ? `#${call.channel}` : chat ? chatName(chat) : 'Call';
+  const hush = call.channel && ch.host ? [btn('🔇 Mute all', () => socket.emit('channel-call-mute', { id: call.channel, all: true }), 'ghost')] : [];
+  document.body.append(el('div', { id: 'call-bar' }, el('span', { textContent: `📞 ${title} · ${who}` }), mute, ...hush, btn('Hang up', hangUp)));
 }
 window.addEventListener('pagehide', hangUp);
 
