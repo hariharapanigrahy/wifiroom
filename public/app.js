@@ -1,5 +1,5 @@
 // The app shell: which pane is showing (sidebar on laptops, tab bar on phones). Loaded before the rest.
-const PANES = ['room', 'chats', 'program', 'games', 'people'];
+const PANES = ['room', 'chats', 'program', 'games', 'files', 'people'];
 function showPane(name) {
   if (!PANES.includes(name)) return;
   for (const p of PANES) {
