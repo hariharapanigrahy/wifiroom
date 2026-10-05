@@ -1,7 +1,7 @@
 {
   "name": "wifiroom",
-  "version": "0.3.0",
-  "description": "See who is on your Wi-Fi, as characters in a tiny pixel room. 100% local and passive.",
+  "version": "0.4.0",
+  "description": "A private intranet for one Wi-Fi: chat, files, games, program and live video for everyone in the room. No internet, no accounts, no cloud.",
   "type": "module",
   "bin": {
     "wifiroom": "bin/wifiroom.js"
@@ -10,6 +10,10 @@
     "bin",
     "public",
     "server.js",
+    "channels.js",
+    "program.js",
+    "games.js",
+    "shares.js",
     "drivers.js",
     "home.js",
     "screen.js",
@@ -29,6 +33,12 @@
     "devices",
     "who-is-on-my-wifi",
     "pixel-art",
+    "lan-party",
+    "offline",
+    "webrtc",
+    "chat",
+    "file-sharing",
+    "games",
     "phaser",
     "local",
     "privacy"

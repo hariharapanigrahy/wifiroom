@@ -1,58 +1,70 @@
 # WiFiRoom 🏠
 
-**See who's on your Wi-Fi, as characters in a tiny pixel room.**
+**A private intranet for one Wi-Fi.** Chat, share files, play games, run a program and go live with a video or your screen, for everyone in the room: a game night, a hostel floor, a classroom, an event, a resort, a flight. No internet, no accounts, no cloud. One command on a laptop, or the phone app.
 
 ```bash
-npx wifiroom
+npx wifiroom --share
 ```
 
-WiFiRoom runs locally on your computer, and nothing leaves your network. It never scans your network: it only listens to what devices already announce.
+Everyone else on the Wi-Fi opens the address it prints (or scans the QR), picks a name, and they're in. Nothing leaves the network.
 
-<!-- TODO: add demo GIF here -->
+<p align="center">
+  <img src="docs/screenshots/phone-room.png" width="180" alt="The room on a phone">
+  <img src="docs/screenshots/phone-chess.png" width="180" alt="Chess on a phone">
+  <img src="docs/screenshots/phone-cards.png" width="180" alt="Crazy Eights on a phone">
+  <img src="docs/screenshots/phone-games.png" width="180" alt="Games and scoreboard on a phone">
+</p>
+<p align="center"><img src="docs/screenshots/laptop-chats.jpg" width="720" alt="Chats on a laptop: channels, direct messages, the conversation"></p>
 
-## What you can do
+## What's in the room
 
-- **👻 Spot strangers.** Every unknown device on your Wi-Fi walks in as a ghost. Name it or trust it and it becomes a person.
-- **🔔 Get alerted** when an unknown device joins your network.
-- **🕒 See who's home.** Nickname the phones in your house, and the timeline shows who arrived and left, and when.
-- **👉 Poke a device** to check it's alive. It sends a real ping, and the character hops with the reply time.
-- **📲 Hang out on the same Wi-Fi.** Start with `--share` and friends scan a QR code to join from any phone (Android, iPhone, laptop). No app, account or internet needed. Chat, send emoji, and drop YouTube or Instagram links straight onto someone's screen.
-- **💬 Chat, 📎 send files and 📞 call** people and small groups in the room, end-to-end encrypted. Files and calls go straight from device to device (WebRTC) when they can; see [Chat, files and calls](#chat-files-and-calls).
-- **📺 Share your screen to the TV.** One click on a Google Cast or DLNA TV (AirPlay on macOS is experimental).
-- **🏡 Run your home.** Turn lights and plugs on and off, dim them, change colors, set the AC, look at cameras. Works with Kasa, Hue, Shelly, LIFX, ONVIF cameras, and anything in Home Assistant.
+Five areas, as a sidebar on laptops and a tab bar on phones:
+
+- **🏠 Room.** Everyone on the Wi-Fi as a character in a tiny pixel room. Unknown devices walk in as ghosts; name them or trust them and they become people. Tap the floor to walk, poke a device to ping it, send a reaction or a link straight to someone's screen.
+- **💬 Chats.** Channels kept on the device hosting the room (`#general` for everyone, `#announcements` for the host, public channels, private rooms), so late arrivals see the history. Direct messages and small groups are end-to-end encrypted and never stored on the host. 📎 sends files device to device; 📞 is a voice call.
+- **📅 Program.** What's happening: a schedule with *now* and *next*, polls, and sign-up sheets. Anyone can add; the host runs the show.
+- **🎲 Games.** ♟️ Chess, 🎲 Ludo (2–4), 🃏 Crazy Eights (2–6), 🂡 Texas Hold'em (2–8, chips, side pots, showdown), a 🔔 buzzer quiz, and 🤔 "Most likely to…", with a scoreboard for the night. Hidden hands stay hidden: each player gets their own view from the host.
+- **📁 Files.** Nothing is uploaded anywhere. You *allow a folder* on your own device; people see the listing and ask for a file, which is sent to them encrypted from your device. Stop sharing and it's gone for everyone. **📺 Live:** play a video or a song from your device, or share your laptop screen, and everyone who presses Watch gets it streamed straight from you, in sync.
+- **👥 People.** Who's here, with message / call / ring buttons, and the host's tools: lock the room, remove someone, clean up.
+
+## How it works
+
+- **One device hosts.** `npx wifiroom --share` on a laptop, or the phone app. The host keeps the channels, program, games and scoreboard in `~/.wifiroom/` (on the phone, in the app's own storage). Everyone else is a browser tab.
+- **One room per Wi-Fi.** A shared room announces itself and answers `/room.json`; `npx wifiroom` and the app look for one first and join it instead of starting a second. `--host` forces a new one. The phone app hands an empty room of its own over to a laptop's room when one appears.
+- **Device to device where it matters.** Calls, files from shares, and live video go straight between the two devices (WebRTC); the room only passes along the sealed connection setup. When a router keeps two devices apart (some split the 2.4 and 5 GHz bands), file transfers fall back to passing through the room, encrypted.
+- **No build step.** Plain HTML/JS served by the host: Phaser for the room, Preact for the panes, tweetnacl for encryption, Socket.IO for the room's own messages.
+
+## Safe with strangers on the Wi-Fi
+
+Public Wi-Fi means strangers. The design assumes it:
+
+- **A name belongs to a key.** Your identity is a key pair your browser keeps; your name is tied to it and unique in the room. Everyone shows a fingerprint (`Harry · #a11c`) derived from the key, which can't be chosen or copied. Same name, different code: different person.
+- **Linking a device moves the key, sealed.** The new device shows a 12-character code (60 bits, single use, 2 minutes); the old device seals its key under that code and leaves the blob with the room, which can't read it. Nobody without the code can claim an identity.
+- **Private chats are end-to-end encrypted** (tweetnacl box). The host only ever sees ciphertext, and nothing is stored on it. Security codes let two people check nobody swapped keys.
+- **Nothing is uploaded to the host.** Files come from the owner's device, only to the person who asked, only while the owner allows it. Files are shared as-is; nothing checks them, and the page says so.
+- **The host can lock the room** (nobody new) and **remove a person** (their key is barred until let back). Games are ended by the people in them, not the host. The host can clean up: end games, clear scores, the program, channels, or forget everyone.
+- **Nothing leaves the network.** No accounts, no cloud, no analytics, no STUN/TURN servers.
 
 ## Usage
 
 ```bash
-npx wifiroom              # just you
-npx wifiroom --share      # let people on your Wi-Fi join at your computer's IP
+npx wifiroom              # join the room on this Wi-Fi, or open one just for you
+npx wifiroom --share      # open a room everyone on this Wi-Fi can join
+npx wifiroom --code       # …and require a 6-digit code to get in
+npx wifiroom --host       # open your own room even if one is already open
 npx wifiroom --port 5000  # use another port
-npx wifiroom --host       # open your own room even if one is already open on this Wi-Fi
 npx wifiroom --help
 ```
 
-Requires [Node.js](https://nodejs.org) 20 or newer.
+Requires [Node.js](https://nodejs.org) 20 or newer. Without `--share` only your own computer can open the room; with it, anyone on the Wi-Fi can join by address or QR, but device controls, addresses and the API stay on your computer. Use `--share` on networks you trust, or `--code` and the host tools above on ones you don't. Calls need the room open at `localhost` or in the app (browsers allow the microphone only on secure pages); `npx wifiroom` opens a joined room through localhost for exactly that reason.
 
-**Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi can join by opening your computer's IP address (e.g. `http://192.168.1.3`), no code needed. iPhones and laptops can also use `http://wifiroom.local`; most Android phones don't understand `.local` names. They can chat, send links and ring phones in the room, but device controls, IP and hardware addresses and the API stay on your computer. Add `--code` to also require a 6-digit code (new every start), and only use `--share` on networks you trust.
+**The phone app** (Android) hosts a room on the phone itself with the same server, joins a laptop's room when there is one, shares folders with the system folder picker, and makes calls. It lives in its own repository.
 
-**One room per Wi-Fi.** If someone on your Wi-Fi already has a shared room open (another laptop with `--share`, or the WiFiRoom phone app), `npx wifiroom` joins theirs instead of starting a second one, and keeps running while you're in it (it opens the room through `http://localhost`, which is what lets calls use your microphone). The Android app does the same, and opens its own room only when it finds none it can reach. A phone hosting a room nobody has joined hands over to a laptop's room when one appears.
+## Chat, files and calls, in detail
 
-## Chats, program and games
-
-The page is an app with five areas: **Room** (the pixel map), **Chats**, **Program**, **Games** and **People**; a sidebar on laptops, a tab bar on phones. The host's tools (invite QR, timeline, smart home) sit in a corner of the sidebar.
-
-- **Channels** (`#general` for everyone, `#announcements` where only the host posts, public channels anyone can join, private rooms with invited members) are kept on the device hosting the room, in `channels.json` next to its other data. Late arrivals see the history; reopening shows the same conversations. People are known by a stable id from the key their browser already keeps for chats, plus a chosen name.
-- **Program**: a title, a schedule that shows what's on now and what's next, polls, and sign-up sheets with an optional limit. The host edits; everyone sees, votes and signs up.
-- **Games**: a scoreboard for the night, a **buzzer quiz** (the host asks, players buzz or pick an answer, the host awards points) and **Most likely to…** (everyone votes for a person, the reveal scores the top pick). The host starts games; points land on the scoreboard, which the host can adjust.
-- **People**: who's here now, with buttons to message, call or ring them, and to add them to a channel.
-
-## Chat, files and calls
-
-Open **💬 Chats**, pick a person or start a group (up to six people).
-
-- **Messages** are end-to-end encrypted in the browser (tweetnacl). The computer running the room only passes along scrambled text and can't read it. Compare security codes with someone to be sure nobody swapped keys.
-- **📎 Files** (up to 200 MB each) go straight from your device to theirs over WebRTC. If the two devices can't reach each other (some routers keep 2.4 GHz and 5 GHz devices apart), the file comes through the room instead, still encrypted with a key only the chat members have. Nothing is stored; a received file stays until you close the page, so save it.
-- **📞 Voice calls** connect each pair of people directly. Browsers only allow the microphone on secure pages, so calls work in the WiFiRoom phone app and on laptops (both open the room through `localhost`), but not from a phone's browser opening `http://192.168…`. Those people can still chat and send files.
+- **Messages** in channels are kept on the host; direct messages and groups are end-to-end encrypted in the browser (tweetnacl), and the host only passes along scrambled text. Compare security codes with someone to be sure nobody swapped keys.
+- **📎 Files** in a chat (up to 200 MB each) go straight from your device to theirs over WebRTC. If the two devices can't reach each other, the file comes through the room instead, still encrypted with a key only the chat members have. Nothing is stored; a received file stays until you close the page, so save it.
+- **📞 Voice calls** connect each pair of people directly. Browsers only allow the microphone on secure pages, so calls work in the app and on laptops (both open the room through `localhost`), but not from a phone's browser opening `http://192.168…`. Those people can still chat and send files.
 
 ## Control your devices
 
