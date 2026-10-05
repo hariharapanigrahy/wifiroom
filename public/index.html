@@ -53,6 +53,9 @@
     .msg.system { max-width: none; background: none; border: 0; color: var(--muted); font-size: 12px; text-align: center; }
     #chats details { font-size: 12px; color: var(--muted); }
     #chats details li { margin: 3px 0; }
+    #call-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #1f3a2a; border-bottom: 2px solid var(--trust); }
+    #call-bar span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
+    .msg a { color: var(--accent); }
     #toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; z-index: 30; pointer-events: none; }
     .toast { background: var(--panel); border: 2px solid var(--line); padding: 8px 14px; border-radius: 6px; box-shadow: 0 4px 0 #000; animation: in .25s ease-out; }
     #cards { position: fixed; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 25; width: min(300px, calc(100vw - 24px)); }
@@ -136,10 +139,10 @@
 
   <div class="modal" id="chats"><div>
     <button class="close" data-close>✕</button>
-    <div class="top"><button class="ghost" id="chats-back" type="button" aria-label="Back">‹</button><h2 id="chats-title">💬 Private chats</h2></div>
+    <div class="top"><button class="ghost" id="chats-back" type="button" aria-label="Back">‹</button><h2 id="chats-title">💬 Private chats</h2><button class="ghost" id="chats-call" type="button" title="Voice call">📞</button></div>
     <div id="chats-sub"></div>
     <div class="scroll" id="chats-body"></div>
-    <form id="chats-form" class="row" autocomplete="off"><input id="chats-text" maxlength="1000" placeholder="Message…" data-keep="1"><button>Send</button></form>
+    <form id="chats-form" class="row" autocomplete="off"><button class="ghost" id="chats-attach" type="button" title="Send files">📎</button><input type="file" id="chats-file" multiple hidden><input id="chats-text" maxlength="1000" placeholder="Message…" data-keep="1"><button>Send</button></form>
   </div></div>
 
   <div class="modal" id="timeline"><div>
@@ -176,5 +179,6 @@
   <script src="/lib/nacl-fast.min.js"></script>
   <script src="room.js"></script>
   <script src="chat.js"></script>
+  <script src="p2p.js"></script>
 </body>
 </html>

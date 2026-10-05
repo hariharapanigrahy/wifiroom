@@ -17,6 +17,7 @@ WiFiRoom runs locally on your computer, and nothing leaves your network. It neve
 - **🕒 See who's home.** Nickname the phones in your house, and the timeline shows who arrived and left, and when.
 - **👉 Poke a device** to check it's alive. It sends a real ping, and the character hops with the reply time.
 - **📲 Hang out on the same Wi-Fi.** Start with `--share` and friends scan a QR code to join from any phone (Android, iPhone, laptop). No app, account or internet needed. Chat, send emoji, and drop YouTube or Instagram links straight onto someone's screen.
+- **💬 Chat, 📎 send files and 📞 call** people and small groups in the room, end-to-end encrypted. Files and calls go straight from device to device (WebRTC) when they can; see [Chat, files and calls](#chat-files-and-calls).
 - **📺 Share your screen to the TV.** One click on a Google Cast or DLNA TV (AirPlay on macOS is experimental).
 - **🏡 Run your home.** Turn lights and plugs on and off, dim them, change colors, set the AC, look at cameras. Works with Kasa, Hue, Shelly, LIFX, ONVIF cameras, and anything in Home Assistant.
 
@@ -35,6 +36,14 @@ Requires [Node.js](https://nodejs.org) 20 or newer.
 **Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi can join by opening your computer's IP address (e.g. `http://192.168.1.3`), no code needed. iPhones and laptops can also use `http://wifiroom.local`; most Android phones don't understand `.local` names. They can chat, send links and ring phones in the room, but device controls, IP and hardware addresses and the API stay on your computer. Add `--code` to also require a 6-digit code (new every start), and only use `--share` on networks you trust.
 
 **One room per Wi-Fi.** If someone on your Wi-Fi already has a shared room open (another laptop with `--share`, or the Android app), `npx wifiroom` joins theirs instead of starting a second one, and keeps running while you're in it (it opens the room through `http://localhost`, which is what lets calls use your microphone). The Android app does the same, and opens its own room only when it finds none it can reach. A phone hosting a room nobody has joined hands over to a laptop's room when one appears.
+
+## Chat, files and calls
+
+Open **💬 Chats**, pick a person or start a group (up to six people).
+
+- **Messages** are end-to-end encrypted in the browser (tweetnacl). The computer running the room only passes along scrambled text and can't read it. Compare security codes with someone to be sure nobody swapped keys.
+- **📎 Files** (up to 200 MB each) go straight from your device to theirs over WebRTC. If the two devices can't reach each other (some routers keep 2.4 GHz and 5 GHz devices apart), the file comes through the room instead, still encrypted with a key only the chat members have. Nothing is stored; a received file stays until you close the page, so save it.
+- **📞 Voice calls** connect each pair of people directly. Browsers only allow the microphone on secure pages, so calls work in the Android app and on laptops (both open the room through `localhost`), but not from a phone's browser opening `http://192.168…`. Those people can still chat and send files.
 
 ## Control your devices
 

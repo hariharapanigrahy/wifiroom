@@ -404,6 +404,25 @@ io.on('connection', async (socket) => {
     ack?.({ ok: true, missed });
   });
 
+  // Calls and file transfers connect browsers directly (WebRTC). This passes their connection setup along,
+  // sealed with the same keys as chats, so the room can't read it or put itself in the middle.
+  socket.on('signal', ({ to, nonce, box } = {}) => {
+    const d = actor(), target = devices.get(to);
+    if (!d || !target || target.id === d.id || typeof nonce !== 'string' || typeof box !== 'string' || box.length > 20000 || !allow('signal', 20)) return;
+    const room = chatRoomOf(target);
+    if (room) io.to(room).emit('signal', { from: d.id, nonce, box });
+  });
+
+  // When two devices can't reach each other directly, file chunks come through here instead, encrypted with
+  // a key only the chat members have. Nothing is kept; the ack paces the sender.
+  socket.on('relay', ({ to, file, seq, chunk } = {}, ack) => {
+    const d = actor(), target = devices.get(to);
+    const room = target && target.id !== d?.id && chatRoomOf(target);
+    if (!d || !room || typeof file !== 'string' || file.length > 40 || !Number.isInteger(seq) || !(chunk instanceof Buffer) || chunk.length > 70_000) return ack?.({ ok: false });
+    io.to(room).emit('relay', { from: d.id, file, seq, chunk });
+    ack?.({ ok: true });
+  });
+
   socket.on('react', ({ to, emoji } = {}) => {
     const d = actor();
     if (d && devices.has(to) && REACTIONS.includes(emoji) && allow('react', 300)) io.emit('react', { from: d.id, to, emoji });
@@ -447,6 +466,7 @@ io.on('connection', async (socket) => {
     if (!host || !d) return;
     if (!d.isSelf) label(id).zone = x < 10 ? 'trusted' : 'unknown';
     d.pos = clampTo(zoneOf(d), { x, y });
+    d.placed = true;
     await db.write();
     broadcast();
   });
@@ -466,7 +486,6 @@ io.on('connection', async (socket) => {
     if (!host || !allow('action', 500)) return ack?.({ ok: false, error: 'Not allowed' });
     try {
       ack?.({ ok: true, message: await controlDevice(id, action, args) });
-    d.placed = true;
     } catch (err) {
       ack?.({ ok: false, error: err.message });
     }
@@ -522,6 +541,18 @@ const joinUrlOf = () => `http://${selfIp()}:${PORT}/${REQUIRE_CODE ? `?code=${CO
 // redirect into the room. Best-effort: skipped quietly if port 80 is taken or not allowed.
 function startShortUrl() {
   bonjour.publish({ name: 'WiFiRoom', type: 'http', port: PORT, host: 'wifiroom.local' });
+  // Lets another laptop or the phone app join this room instead of opening a second one. The address goes
+  // in TXT because Android names itself "localhost", and is announced again when the Wi-Fi address changes.
+  // Never the code: anyone on the Wi-Fi can read this.
+  let announced = null;
+  const announce = () => {
+    const url = `http://${selfIp()}:${PORT}/`;
+    if (announced?.url === url) return;
+    announced?.service.stop();
+    announced = { url, service: bonjour.publish({ name: `WiFiRoom ${randomInt(1e9)}`, type: 'wifiroom', port: PORT, txt: { url } }) };
+  };
+  announce();
+  setInterval(announce, 30_000);
   const redirect = http.createServer((req, res) => { res.writeHead(302, { location: joinUrlOf() }); res.end(); });
   redirect.on('error', () => {});
   redirect.listen(80, HOST, () => console.log(`     Short address: http://${selfIp()} (iPhones and laptops can also use http://wifiroom.local; most Android phones can't)`));
@@ -543,18 +574,6 @@ server.listen(PORT, HOST, () => {
   }
   console.log(`  💾 Your labels are saved in ${DATA_DIR}\n`);
   if (process.env.WIFIROOM_OPEN === '1') import('open').then(({ default: open }) => open(`http://localhost:${PORT}`)).catch(() => {});
-  // Lets another laptop or the phone app join this room instead of opening a second one. The address goes
-  // in TXT because Android names itself "localhost", and is announced again when the Wi-Fi address changes.
-  // Never the code: anyone on the Wi-Fi can read this.
-  let announced = null;
-  const announce = () => {
-    const url = `http://${selfIp()}:${PORT}/`;
-    if (announced?.url === url) return;
-    announced?.service.stop();
-    announced = { url, service: bonjour.publish({ name: `WiFiRoom ${randomInt(1e9)}`, type: 'wifiroom', port: PORT, txt: { url } }) };
-  };
-  announce();
-  setInterval(announce, 30_000);
 });
 // Reading the ARP table only shows devices this computer recently talked to. A gentle sweep (one ping per
 // address, in small batches) fills it in so quiet devices like TVs and speakers appear too.

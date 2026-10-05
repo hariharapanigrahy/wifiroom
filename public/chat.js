@@ -125,6 +125,7 @@ socket.on('dm', ({ from, nonce, box }) => {
     toast(`👥 ${personName(from)} added you to ${chatName(chat)}`);
     return renderChats(), updateBadge();
   }
+  if (/^(file|call)/.test(p.t)) return onP2p(from, chat, p), updateBadge(); // see p2p.js
   if (p.t !== 'msg' || typeof p.text !== 'string') return;
   addMsg(chat, { from, text: p.text.slice(0, 1000), ts: Date.now() }, { unread: true });
   const open = view.screen === 'chat' && view.chatId === chat.id && $('chats').classList.contains('open');
@@ -190,7 +191,7 @@ function renderChats() {
     saveChats();
     updateBadge();
     $('chats-title').textContent = `${chat.kind === 'group' ? '👥' : '💬'} ${chatName(chat)}`;
-    back.style.display = form.style.display = '';
+    back.style.display = form.style.display = $('chats-call').style.display = '';
     if (chat.kind === 'dm') {
       const key = keyOf(others(chat)[0]) ?? pins[others(chat)[0]];
       sub.replaceChildren(el('p', { className: 'lock' }, '🔒 End-to-end encrypted. ', ...(key ? ['Security code ', el('b', { textContent: securityCode(key) }), '. Theirs for you should read ', el('b', { textContent: securityCode(myChatKey()) }), '.'] : ['They need to be in the room to get messages.'])));
@@ -207,14 +208,14 @@ function renderChats() {
     body.replaceChildren(...(chat.msgs.length ? chat.msgs.map((m) => m.system ? el('div', { className: 'msg system', textContent: m.text })
       : el('div', { className: `msg${m.from === myId() ? ' mine' : ''}` },
         ...(chat.kind === 'group' && m.from !== myId() ? [el('span', { className: 'meta', textContent: personName(m.from) })] : []),
-        m.text,
+        ...(m.file ? fileView(m) : [m.text]),
         el('span', { className: 'meta', textContent: new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })))
       : [el('p', { className: 'note', textContent: 'No messages yet. Only the people in this chat can read what you send; the computer running the room just passes along scrambled text.' })]));
     if (atBottom || body.dataset.chat !== chat.id) body.scrollTop = body.scrollHeight;
     body.dataset.chat = chat.id;
     return;
   }
-  form.style.display = 'none';
+  form.style.display = $('chats-call').style.display = 'none';
   body.dataset.chat = '';
   const people = reachable();
   if (view.screen === 'new') {
@@ -250,7 +251,7 @@ function renderChats() {
     const last = c.msgs.at(-1);
     return el('button', { className: 'chat-row', type: 'button', onclick: () => openChats(c.id) },
       el('span', {}, c.kind === 'group' ? '👥' : '💬'),
-      el('span', { className: 'who' }, chatName(c), el('div', { textContent: last ? `${last.system ? '' : last.from === myId() ? 'You: ' : c.kind === 'group' ? `${personName(last.from)}: ` : ''}${last.text}` : 'No messages yet' })),
+      el('span', { className: 'who' }, chatName(c), el('div', { textContent: last ? `${last.system ? '' : last.from === myId() ? 'You: ' : c.kind === 'group' ? `${personName(last.from)}: ` : ''}${last.text ?? `📎 ${last.file?.name}`}` : 'No messages yet' })),
       el('span', { className: 'badge', textContent: c.unread ? String(c.unread) : '' }));
   });
   const start = people.filter((d) => !chats[dmId(myId(), d.id)]).map((d) => el('button', { className: 'chat-row', type: 'button', onclick: () => openDm(d.id) }, el('span', {}, '➕'), el('span', { className: 'who', textContent: nameOf(d) })));
@@ -263,6 +264,9 @@ function renderChats() {
 
 $('open-chats').onclick = () => openChats();
 $('chats-back').onclick = () => openChats();
+$('chats-attach').onclick = () => $('chats-file').click();
+$('chats-file').onchange = () => { const chat = chats[view.chatId]; if (chat) shareFiles(chat, [...$('chats-file').files]); $('chats-file').value = ''; };
+$('chats-call').onclick = () => { const chat = chats[view.chatId]; if (chat) startCall(chat); };
 $('chats-form').onsubmit = (e) => { e.preventDefault(); send($('chats-text').value); $('chats-text').value = ''; $('chats-text').focus(); };
 
 // Offer our key to the room (visitors send it with "join"; the host page has no join step) and keep the
