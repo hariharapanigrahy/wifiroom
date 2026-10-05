@@ -340,10 +340,12 @@ io.on('connection', async (socket) => {
   programOf.attach(socket);
   gamesOf.attach(socket);
   sharesOf.attach(socket);
+  // Anyone in the room can invite others: the address and QR go to everyone (people who joined already know the code).
   const joinUrl = joinUrlOf();
   socket.emit('hello', {
     host, build: BUILD, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',
-    ...(host && { code: REQUIRE_CODE ? CODE : null, joinUrl, qr: await QRCode.toDataURL(joinUrl, { margin: 1, width: 240 }) }),
+    joinUrl: SHARE ? joinUrl : null, qr: SHARE ? await QRCode.toDataURL(joinUrl, { margin: 1, width: 240 }) : null,
+    ...(host && { code: REQUIRE_CODE ? CODE : null }),
   });
   socket.emit('devices', snapshot(host));
   if (host) {

@@ -357,9 +357,10 @@ socket.on('hello', (h) => {
   state.platform = h.platform;
   state.reactions = h.reactions;
   document.body.classList.toggle('host', h.host);
+  state.joinUrl = h.joinUrl; state.qr = h.qr;
   if (h.host) {
     document.body.classList.add('in-room');
-    $('qr').src = h.qr; $('code').textContent = h.code ?? ''; $('join-url').textContent = h.joinUrl;
+    $('qr').src = h.qr ?? ''; $('code').textContent = h.code ?? ''; $('join-url').textContent = h.joinUrl ?? '';
     $('lan-warn').style.display = h.lanShared ? 'none' : '';
     $('hint').textContent = 'Click a character to interact · drag to trust · tap the floor to walk';
   } else if (state.you) {

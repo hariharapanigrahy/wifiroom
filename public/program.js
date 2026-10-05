@@ -151,13 +151,27 @@ function Person({ p }) {
         <option value="">＋ add to…</option>${channels.map((c) => html`<option value=${c.id}>${c.kind === 'public' ? '#' : '🔒'} ${c.name}</option>`)}</select>`}
     </div></div>`;
 }
+// Bring people in: the room's address as a QR and a link, with the phone's share sheet where there is one.
+function Invite() {
+  const url = state.joinUrl, qr = state.qr;
+  if (!url) return html`<${Card} title="📲 Invite"><p class="note">${state.host ? 'Phones can\'t reach this room yet: restart with npx wifiroom --share.' : 'Ask the host for the address.'}</p><//>`;
+  const share = () => (navigator.share ? navigator.share({ title: 'Join my WiFiRoom', text: 'Open this on the same Wi-Fi:', url }).catch(() => {}) : navigator.clipboard?.writeText(url).then(() => toast('📋 Address copied')));
+  return html`<${Card} title="📲 Invite" right=${html`<button class="sm" onClick=${share}>${navigator.share ? 'Share' : 'Copy'}</button>`}>
+    <div class="row" style="align-items:flex-start;gap:14px">
+      ${qr && html`<img src=${qr} width="150" height="150" alt="Join QR" style="border-radius:6px;image-rendering:pixelated" />`}
+      <div style="flex:1;min-width:0"><p style="margin:0 0 6px">Anyone on this Wi-Fi: scan, or open</p><p class="code" style="font-size:18px;letter-spacing:0;text-align:left;word-break:break-all;margin:0">${url}</p><p class="note">They pick a name and they're in. No app, no account.</p></div>
+    </div>
+  <//>`;
+}
+
 function People() {
   const people = Object.entries(window.ch?.people ?? {}).map(([id, p]) => ({ id, ...p })).sort((a, b) => (b.online - a.online) || (b.host - a.host) || a.name.localeCompare(b.name));
-  if (!me()) return html`<${NamePrompt} />`;
+  if (!me()) return html`<div class="program"><${Invite} /><${NamePrompt} /></div>`;
   if (!people.length) return html`<${Empty} icon="👥"><p>Nobody has joined yet. Share the room's address or the Invite QR.</p><//>`;
   const here = people.filter((p) => p.online && !p.banned), away = people.filter((p) => !p.online && !p.banned), banned = people.filter((p) => p.banned);
   const locked = !!window.ch?.locked;
   return html`<div class="program">
+    <${Invite} />
     ${amHost() && html`<div class="row" style="margin-bottom:8px"><button class=${locked ? '' : 'ghost'} onClick=${() => act('room-lock', { locked: !locked })}>${locked ? '🔒 Room locked · unlock' : '🔓 Lock the room'}</button><span class="note" style="flex:1">${locked ? 'Nobody new can join. People already here stay.' : 'Anyone on this Wi-Fi can join. Lock it once everyone is in.'}</span></div>`}
     ${!amHost() && locked && html`<p class="note">🔒 The host has locked the room; nobody new can join.</p>`}
     <h3>${here.length} here now</h3>${here.map((p) => html`<${Person} p=${p} key=${p.id} />`)}
