@@ -204,7 +204,7 @@ function NewGame({ types }) {
       <input placeholder="Title (optional)" maxLength=${60} value=${title} onInput=${(e) => setTitle(e.target.value)} />
       <button onClick=${async () => { const r = await act('game-create', { type, title }); if (r.ok) { setTitle(''); games.open = r.id; draw(); } }}>Start</button>
     </div>
-    <p class="note">♟️ Chess: two seats, first to join is white. 🎲 Ludo: 2–4 seats, a 6 to leave base, captures send tokens home. 🃏 Crazy Eights: 2–6, match suit or rank, 8s are wild. 🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
+    <p class="note">♟️ Chess: two seats, first to join is white. 🎲 Ludo: 2–4 seats, a 6 to leave base, captures send tokens home. 🃏 Crazy Eights: 2–6, match suit or rank, 8s are wild. 🂡 Hold'em: 2–8, chips and blinds, side pots, showdown. 🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
   <//>`;
 }
 
@@ -351,8 +351,38 @@ function Eights({ g }) {
   </div>`;
 }
 
+// ---- Texas Hold'em table ----
+const PK = (c) => (c ? `${c[0] === 'T' ? '10' : c[0]}${{ s: '♠', h: '♥', d: '♦', c: '♣' }[c[1]]}` : '');
+function Holdem({ g }) {
+  const s = g.state, mine = me();
+  const [to, setTo] = useState(0);
+  const names = Object.fromEntries(g.players.map((p) => [p.id, p.name]));
+  const meP = s.players.find((p) => p.id === mine);
+  const raiseTo = Math.min(Math.max(to || s.minTo, s.minTo), s.maxTo);
+  const betting = ['preflop', 'flop', 'turn', 'river'].includes(s.phase);
+  return html`<div class="poker">
+    <div class="seats">${s.players.map((p, i) => html`<div key=${p.id} class="seat ${i === s.turn && betting ? 'turn' : ''} ${p.folded ? 'folded' : ''} ${p.out ? 'out' : ''}">
+      <div><b>${names[p.id]}</b>${p.dealer ? ' Ⓓ' : ''}</div><div class="note">${p.out ? 'out of chips' : `${p.chips} chips`}${p.bet ? ` · bet ${p.bet}` : ''}${p.allin ? ' · all in' : ''}${p.folded ? ' · folded' : ''}</div>
+      ${s.result?.shown?.[p.id] && html`<div class="hand">${s.result.shown[p.id].map((c) => html`<${PCard} key=${c} c=${PK(c)} small />`)}</div>`}
+    </div>`)}</div>
+    ${s.started && html`<div class="table"><div class="note">Pot ${s.pot}${s.currentBet ? ` · bet ${s.currentBet}` : ''} · ${s.phase === 'done' ? 'hand over' : s.phase}</div>
+      <div class="hand">${s.community.map((c) => html`<${PCard} key=${c} c=${PK(c)} />`)}${[...Array(Math.max(0, 5 - s.community.length))].map((_, i) => html`<span key=${i} class="pcard slot"></span>`)}</div></div>`}
+    ${s.hole && html`<div><div class="note">Your cards</div><div class="hand">${s.hole.map((c) => html`<${PCard} key=${c} c=${PK(c)} />`)}</div></div>`}
+    ${s.result && html`<p><b>${Object.entries(s.result.won).map(([p, a]) => `${names[p]} wins ${a}${s.result.names[p] ? ` · ${s.result.names[p]}` : ''}`).join(' · ')}</b></p>`}
+    ${s.mine && html`<div class="row" style="margin:8px 0">
+      <button class="ghost" onClick=${() => gact(g.id, 'act', { move: 'fold' })}>Fold</button>
+      ${s.canCheck ? html`<button onClick=${() => gact(g.id, 'act', { move: 'check' })}>Check</button>` : html`<button onClick=${() => gact(g.id, 'act', { move: 'call' })}>Call ${Math.min(s.toCall, meP?.chips ?? 0)}</button>`}
+      ${s.maxTo > s.currentBet && html`<span class="row"><input type="number" style="width:90px" min=${s.minTo} max=${s.maxTo} step="10" value=${raiseTo} onInput=${(e) => setTo(Number(e.target.value))} /><button class="ghost" disabled=${raiseTo < s.minTo || raiseTo > s.maxTo} onClick=${() => gact(g.id, 'act', { move: 'raise', to: raiseTo })}>Raise to ${raiseTo}</button><button class="ghost" onClick=${() => gact(g.id, 'act', { move: 'allin' })}>All in</button></span>`}
+    </div>`}
+    ${!s.mine && betting && html`<p class="note">${names[g.players[s.turn]?.id]} to act…</p>`}
+    ${['idle', 'done'].includes(s.phase) && (s.seat >= 0 ? html`<p>${g.players.length < 2 ? html`<span class="note">Waiting for a second player…</span>` : html`<button onClick=${() => gact(g.id, 'deal')}>🂡 ${s.started ? 'Next hand' : 'Deal'}</button>`}</p>` : html`<p class="note">You're watching.${!s.locked ? ' Take a seat to play.' : ''}</p>`)}
+    ${s.log.length > 0 && html`<p class="note">${s.log.join(' · ')}</p>`}
+    <p class="note">Blinds 10/20, everyone starts with 1000 chips. Chips are just for the night.</p>
+  </div>`;
+}
+
 function GameView({ g }) {
-  const body = { quiz: Quiz, chess: ChessBoard, ludo: LudoBoard, eights: Eights, likely: Likely }[g.type] ?? Likely;
+  const body = { quiz: Quiz, chess: ChessBoard, ludo: LudoBoard, eights: Eights, holdem: Holdem, likely: Likely }[g.type] ?? Likely;
   const bodyEl = html`<${body} g=${g} />`;
   return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${g.runs && html`<button class="ghost sm" onClick=${() => confirm('End this game?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
     ${!g.joined && (!g.seats || g.players.length < g.seats) && html`<p><button onClick=${() => act('game-join', { id: g.id })}>${g.seats ? 'Take a seat' : 'Join this game'}</button></p>`}

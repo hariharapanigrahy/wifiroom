@@ -5,6 +5,8 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { JSONFilePreset } from 'lowdb/node';
 import { Chess } from 'chess.js';
+import { createRequire } from 'node:module';
+const { Hand } = createRequire(import.meta.url)('pokersolver');
 
 const id = () => randomBytes(5).toString('hex');
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -222,7 +224,121 @@ const eights = {
   },
 };
 
-const TYPES = { chess, ludo, eights, quiz, likely };
+// ---- Texas Hold'em: 2–8 seats, chips (1000 each to start), blinds 10/20, a dealer button that moves, four
+// betting streets, all-ins with side pots, showdown by pokersolver. Each player sees their own hole cards;
+// everyone's are shown at a showdown. A hand is dealt by anyone seated once the previous one is over.
+const PDECK = () => { const d = []; for (const s of 'shdc') for (const r of '23456789TJQKA') d.push(r + s); for (let i = d.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [d[i], d[j]] = [d[j], d[i]]; } return d; };
+const holdem = {
+  name: "Texas Hold'em", icon: '🂡', min: 2, max: 8, SB: 10, BB: 20, STACK: 1000,
+  create: () => ({ started: false, locked: false, chips: {}, dealer: -1, hand: 0, phase: 'idle', deck: [], community: [], hole: {}, bets: {}, committed: {}, folded: {}, allin: {}, acted: {}, turn: null, currentBet: 0, minRaise: 20, result: null, log: [], out: {} }),
+  seats(g, s) { return g.players.filter((p) => (s.chips[p] ?? holdem.STACK) > 0); },
+  live(g, s) { return g.players.filter((p) => s.hole[p] && !s.folded[p]); },
+  canAct(g, s) { return holdem.live(g, s).filter((p) => !s.allin[p]); },
+  nextFrom(g, s, i) { // next seat after index i that can still act
+    const n = g.players.length;
+    for (let k = 1; k <= n; k++) { const j = (i + k) % n; const p = g.players[j]; if (s.hole[p] && !s.folded[p] && !s.allin[p]) return j; }
+    return null;
+  },
+  put(s, uid, amount) { const a = Math.min(amount, s.chips[uid]); s.chips[uid] -= a; s.bets[uid] = (s.bets[uid] ?? 0) + a; s.committed[uid] = (s.committed[uid] ?? 0) + a; if (s.chips[uid] === 0) s.allin[uid] = true; return a; },
+  step(g, s, uid, action, data) {
+    const seat = g.players.indexOf(uid);
+    if (seat < 0) return;
+    if (action === 'deal' && ['idle', 'done'].includes(s.phase)) {
+      for (const p of g.players) s.chips[p] ??= holdem.STACK;
+      const seated = holdem.seats(g, s);
+      if (seated.length < 2) return;
+      s.locked = true; s.started = true; s.hand++; s.result = null;
+      Object.assign(s, { deck: PDECK(), community: [], hole: {}, bets: {}, committed: {}, folded: {}, allin: {}, acted: {}, currentBet: 0, minRaise: holdem.BB });
+      for (const p of seated) s.hole[p] = [s.deck.pop(), s.deck.pop()];
+      // the button moves to the next seated player; blinds follow it (heads-up: the button posts the small blind)
+      const n = g.players.length;
+      do { s.dealer = (s.dealer + 1) % n; } while (!s.hole[g.players[s.dealer]]);
+      const order = []; for (let k = 1; k <= n; k++) { const p = g.players[(s.dealer + k) % n]; if (s.hole[p]) order.push(p); }
+      const sbP = seated.length === 2 ? g.players[s.dealer] : order[0], bbP = seated.length === 2 ? order[0] : order[1];
+      holdem.put(s, sbP, holdem.SB); holdem.put(s, bbP, holdem.BB);
+      s.currentBet = holdem.BB; s.phase = 'preflop';
+      s.turn = holdem.nextFrom(g, s, g.players.indexOf(bbP));
+      s.log = [`Hand ${s.hand}: ${g.names[sbP]} small blind, ${g.names[bbP]} big blind`];
+      if (s.turn === null) holdem.settle(g, s);
+      return;
+    }
+    if (action === 'act' && s.turn === seat && ['preflop', 'flop', 'turn', 'river'].includes(s.phase)) {
+      const toCall = s.currentBet - (s.bets[uid] ?? 0);
+      const move = String(data?.move);
+      if (move === 'fold') { s.folded[uid] = true; s.log.push(`${g.names[uid]} folds`); }
+      else if (move === 'check') { if (toCall > 0) return; s.log.push(`${g.names[uid]} checks`); }
+      else if (move === 'call') { if (toCall <= 0) return; const a = holdem.put(s, uid, toCall); s.log.push(`${g.names[uid]} calls ${a}${s.allin[uid] ? ' (all in)' : ''}`); }
+      else if (move === 'raise' || move === 'allin') {
+        const to = move === 'allin' ? (s.bets[uid] ?? 0) + s.chips[uid] : Number(data?.to);
+        const raiseBy = to - s.currentBet;
+        if (!(to > s.currentBet) || !Number.isFinite(to)) return;
+        if (raiseBy < s.minRaise && to < (s.bets[uid] ?? 0) + s.chips[uid]) return; // too small, unless it's all the chips
+        holdem.put(s, uid, to - (s.bets[uid] ?? 0));
+        const newBet = s.bets[uid];
+        if (newBet > s.currentBet) { if (newBet - s.currentBet >= s.minRaise) s.minRaise = newBet - s.currentBet; s.currentBet = newBet; for (const p of g.players) if (p !== uid) delete s.acted[p]; }
+        s.log.push(`${g.names[uid]} ${s.allin[uid] ? 'is all in for' : 'raises to'} ${newBet}`);
+      } else return;
+      s.acted[uid] = true;
+      s.log = s.log.slice(-8);
+      if (holdem.live(g, s).length === 1) return holdem.settle(g, s);
+      // next to act: someone live, not all in, who hasn't acted since the last raise
+      const next = (() => { const n = g.players.length; for (let k = 1; k <= n; k++) { const j = (seat + k) % n; const p = g.players[j]; if (s.hole[p] && !s.folded[p] && !s.allin[p] && !s.acted[p]) return j; } return null; })();
+      if (next !== null) { s.turn = next; return; }
+      holdem.nextStreet(g, s);
+    }
+  },
+  nextStreet(g, s) {
+    s.bets = {}; s.acted = {}; s.currentBet = 0; s.minRaise = holdem.BB;
+    const canAct = holdem.canAct(g, s);
+    const deal = (n) => { for (let i = 0; i < n; i++) s.community.push(s.deck.pop()); };
+    if (s.phase === 'preflop') { deal(3); s.phase = 'flop'; }
+    else if (s.phase === 'flop') { deal(1); s.phase = 'turn'; }
+    else if (s.phase === 'turn') { deal(1); s.phase = 'river'; }
+    else return holdem.settle(g, s);
+    if (canAct.length < 2) return holdem.nextStreet(g, s); // everyone's all in: run it out
+    s.turn = holdem.nextFrom(g, s, s.dealer);
+  },
+  settle(g, s) {
+    while (s.community.length < 5 && holdem.live(g, s).length > 1) s.community.push(s.deck.pop());
+    const live = holdem.live(g, s);
+    const won = {}; const names = {};
+    if (live.length === 1) { const total = Object.values(s.committed).reduce((a, b) => a + b, 0); won[live[0]] = total; }
+    else {
+      const solved = Object.fromEntries(live.map((p) => [p, Hand.solve([...s.hole[p], ...s.community])]));
+      for (const p of live) names[p] = solved[p].descr;
+      const levels = [...new Set(Object.values(s.committed))].sort((a, b) => a - b);
+      let prev = 0;
+      for (const level of levels) {
+        const amount = Object.values(s.committed).reduce((sum, c) => sum + Math.max(0, Math.min(c, level) - prev), 0);
+        const eligible = live.filter((p) => s.committed[p] >= level);
+        if (amount > 0 && eligible.length) {
+          const best = Hand.winners(eligible.map((p) => solved[p]));
+          const winners = eligible.filter((p) => best.includes(solved[p]));
+          const share = Math.floor(amount / winners.length); let rest = amount - share * winners.length;
+          for (const w of winners) { won[w] = (won[w] ?? 0) + share + (rest > 0 ? 1 : 0); if (rest > 0) rest--; }
+        }
+        prev = level;
+      }
+    }
+    for (const [p, a] of Object.entries(won)) { s.chips[p] += a; g.award(p, 1); }
+    s.result = { won, names, shown: live.length > 1 ? Object.fromEntries(live.map((p) => [p, s.hole[p]])) : {}, community: s.community };
+    s.log.push(`${Object.entries(won).map(([p, a]) => `${g.names[p]} wins ${a}${names[p] ? ` with ${names[p]}` : ''}`).join(', ')}`);
+    s.phase = 'done'; s.turn = null;
+    for (const p of g.players) if (s.chips[p] === 0) s.out[p] = true;
+  },
+  view(s, uid, g) {
+    const seat = g.players.indexOf(uid);
+    const toCall = s.turn === seat ? s.currentBet - (s.bets[uid] ?? 0) : 0;
+    const chips = s.chips[uid] ?? 0;
+    return { started: s.started, locked: s.locked, phase: s.phase, hand: s.hand, seat, turn: s.turn, dealer: s.dealer, community: s.community, hole: s.hole[uid] ?? null,
+      pot: Object.values(s.committed).reduce((a, b) => a + b, 0), currentBet: s.currentBet, minRaise: s.minRaise, toCall, mine: s.turn === seat && ['preflop', 'flop', 'turn', 'river'].includes(s.phase),
+      canCheck: toCall === 0, maxTo: (s.bets[uid] ?? 0) + chips, minTo: s.currentBet + s.minRaise,
+      players: g.players.map((p, i) => ({ id: p, chips: s.chips[p] ?? holdem.STACK, bet: s.bets[p] ?? 0, folded: !!s.folded[p], allin: !!s.allin[p], inHand: !!s.hole[p], dealer: i === s.dealer, out: !!s.out[p] })),
+      result: s.result, log: s.log.slice(-5) };
+  },
+};
+
+const TYPES = { chess, ludo, eights, holdem, quiz, likely };
 
 export async function startGames({ dataDir, io, isHost, nameOf }) {
   const db = await JSONFilePreset(path.join(dataDir, 'games.json'), { scores: {}, games: [] });
