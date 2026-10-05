@@ -35,7 +35,16 @@ Requires [Node.js](https://nodejs.org) 20 or newer.
 
 **Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi can join by opening your computer's IP address (e.g. `http://192.168.1.3`), no code needed. iPhones and laptops can also use `http://wifiroom.local`; most Android phones don't understand `.local` names. They can chat, send links and ring phones in the room, but device controls, IP and hardware addresses and the API stay on your computer. Add `--code` to also require a 6-digit code (new every start), and only use `--share` on networks you trust.
 
-**One room per Wi-Fi.** If someone on your Wi-Fi already has a shared room open (another laptop with `--share`, or the Android app), `npx wifiroom` joins theirs instead of starting a second one, and keeps running while you're in it (it opens the room through `http://localhost`, which is what lets calls use your microphone). The Android app does the same, and opens its own room only when it finds none it can reach. A phone hosting a room nobody has joined hands over to a laptop's room when one appears.
+**One room per Wi-Fi.** If someone on your Wi-Fi already has a shared room open (another laptop with `--share`, or the WiFiRoom phone app), `npx wifiroom` joins theirs instead of starting a second one, and keeps running while you're in it (it opens the room through `http://localhost`, which is what lets calls use your microphone). The Android app does the same, and opens its own room only when it finds none it can reach. A phone hosting a room nobody has joined hands over to a laptop's room when one appears.
+
+## Chats, program and games
+
+The page is an app with five areas: **Room** (the pixel map), **Chats**, **Program**, **Games** and **People**; a sidebar on laptops, a tab bar on phones. The host's tools (invite QR, timeline, smart home) sit in a corner of the sidebar.
+
+- **Channels** (`#general` for everyone, `#announcements` where only the host posts, public channels anyone can join, private rooms with invited members) are kept on the device hosting the room, in `channels.json` next to its other data. Late arrivals see the history; reopening shows the same conversations. People are known by a stable id from the key their browser already keeps for chats, plus a chosen name.
+- **Program**: a title, a schedule that shows what's on now and what's next, polls, and sign-up sheets with an optional limit. The host edits; everyone sees, votes and signs up.
+- **Games**: a scoreboard for the night, a **buzzer quiz** (the host asks, players buzz or pick an answer, the host awards points) and **Most likely to…** (everyone votes for a person, the reveal scores the top pick). The host starts games; points land on the scoreboard, which the host can adjust.
+- **People**: who's here now, with buttons to message, call or ring them, and to add them to a channel.
 
 ## Chat, files and calls
 
@@ -43,7 +52,7 @@ Open **💬 Chats**, pick a person or start a group (up to six people).
 
 - **Messages** are end-to-end encrypted in the browser (tweetnacl). The computer running the room only passes along scrambled text and can't read it. Compare security codes with someone to be sure nobody swapped keys.
 - **📎 Files** (up to 200 MB each) go straight from your device to theirs over WebRTC. If the two devices can't reach each other (some routers keep 2.4 GHz and 5 GHz devices apart), the file comes through the room instead, still encrypted with a key only the chat members have. Nothing is stored; a received file stays until you close the page, so save it.
-- **📞 Voice calls** connect each pair of people directly. Browsers only allow the microphone on secure pages, so calls work in the Android app and on laptops (both open the room through `localhost`), but not from a phone's browser opening `http://192.168…`. Those people can still chat and send files.
+- **📞 Voice calls** connect each pair of people directly. Browsers only allow the microphone on secure pages, so calls work in the WiFiRoom phone app and on laptops (both open the room through `localhost`), but not from a phone's browser opening `http://192.168…`. Those people can still chat and send files.
 
 ## Control your devices
 
@@ -192,22 +201,6 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 | Smart-home drivers | written from docs; Home Assistant tested against a simulator | same | same |
 
 Bug reports from Windows and Linux are very welcome.
-
-### Android app (host the room on a phone)
-
-`android/` is a small app that runs the WiFiRoom server on the phone itself, using [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) (Node 18), and shows the room. Others on the same Wi-Fi, or on the phone's own hotspot, join at the address in its notification (`http://<phone IP>:4321`). It keeps running in the background until you tap **Stop** in the notification.
-
-```bash
-cd android && ./gradlew assembleDebug    # needs the Android SDK + NDK (Android Studio) and JDK 17+
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-What's different on a phone:
-
-- **No ARP table on Android 10+**, so the phone can't see devices that stay quiet. It finds devices that answer a ping instead and pings them again to see who's still here. Makers are never shown (no hardware addresses), and many phones don't answer pings, so they appear once they open the room.
-- **No screen sharing (no ffmpeg) or AirPlay mirroring.** Casting, smart-home control and Bonjour names still work.
-- **The short address works** (`http://<phone IP>` redirects into the room), but most Android phones can't open `.local` names.
-- **64-bit ARM only** (nearly every phone since 2017), which keeps the APK around 65 MB.
 
 ## Built from
 
