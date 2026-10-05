@@ -22,7 +22,7 @@ const Empty = ({ icon, children }) => html`<div class="empty"><div style="font-s
 function NamePrompt() {
   const [name, setName] = useState(load('wifiroom.myName', '') || state.name || '');
   return html`<${Empty} icon="📅">
-    <p>Pick a name to see the program and join in.</p>
+    <p>${window.ch?.nameError ?? 'Pick a name to see the program and join in.'}</p>
     <div class="row" style="max-width:320px"><input value=${name} maxLength=${40} placeholder="Your name" onInput=${(e) => setName(e.target.value)} />
       <button onClick=${() => { save('wifiroom.myName', name.trim()); identify(); }}>Continue</button></div>
   <//>`;
@@ -143,7 +143,7 @@ function Person({ p }) {
   const call = async () => { openDm(dev.id); await new Promise((r) => setTimeout(r, 100)); startCall(chats[view.chatId]); };
   return html`<div class="person">
     <div class="chat-row"><span>${p.online ? '🟢' : '⚪'}</span>
-      <span class="who">${p.name}${p.id === me() ? ' (you)' : ''}${p.host ? html` <span class="pill">host</span>` : ''}<div>${p.online ? (dev ? 'in the room' : 'online') : `last seen ${new Date(p.seen).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}</div></span>
+      <span class="who">${p.name} <span class="note">#${p.tag}</span>${p.id === me() ? ' (you)' : ''}${p.host ? html` <span class="pill">host</span>` : ''}<div>${p.online ? (dev ? 'in the room' : 'online') : `last seen ${new Date(p.seen).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}</div></span>
       ${dev && html`<button class="ghost sm" onClick=${dm}>💬</button><button class="ghost sm" onClick=${call} title="Voice call">📞</button>`}
       ${dev && dev.caps?.includes('ring') && html`<button class="ghost sm" title="Ring their phone" onClick=${() => socket.emit('ring', { to: dev.id }, (r) => toast(r.ok ? '🔔 Ringing…' : `⚠️ ${r.error}`))}>🔔</button>`}
       ${channels.length > 0 && p.id !== me() && html`<select class="sm" style="width:auto" onChange=${(e) => { if (e.target.value) { act('channel-invite', { id: e.target.value, who: p.id }); e.target.value = ''; } }}>
@@ -158,8 +158,23 @@ function People() {
   return html`<div class="program">
     <h3>${here.length} here now</h3>${here.map((p) => html`<${Person} p=${p} key=${p.id} />`)}
     ${away.length > 0 && html`<h3>Been here before</h3>${away.map((p) => html`<${Person} p=${p} key=${p.id} />`)}`}
-    <p class="note">💬 opens a private, end-to-end encrypted chat. 📞 calls them. People show up here once they've picked a name.</p>
+    <p class="note">💬 opens a private, end-to-end encrypted chat. 📞 calls them. People show up here once they've picked a name. The #code next to a name comes from their key and can't be chosen: same name, different code, different person.</p>
+    <${LinkDevice} />
   </div>`;
+}
+
+// Carry this identity to another device (see channels.js).
+function LinkDevice() {
+  const L = window.wifiroomLink?.link ?? {};
+  const [code, setCode] = useState('');
+  const [mode, setMode] = useState(null);
+  return html`<${Card} title="Use this name on another device">
+    ${!mode && html`<div class="row"><button class="ghost" onClick=${() => { setMode('new'); wifiroomLink.startLinkWait(); }}>This is my new device</button><button class="ghost" onClick=${() => setMode('old')}>I'm on my old device</button></div>
+      <p class="note">Your name belongs to a key kept in this browser. Linking moves the key, sealed, through the room; the room can't read it, and nobody without the code can claim it.</p>`}
+    ${mode === 'new' && html`<div>${L.done ? html`<p>✅ Linked. Reloading…</p>` : L.code ? html`<p>On your old device, open People → "I'm on my old device" and type this code:</p><div class="code">${L.code}</div><p class="note">Waiting… the code works for 2 minutes, once.</p>` : html`<p class="note">That code expired.</p>`}
+      <button class="ghost sm" onClick=${() => { clearInterval(L.timer); L.code = null; setMode(null); }}>Cancel</button></div>`}
+    ${mode === 'old' && html`<div class="row"><input placeholder="Code shown on the new device" value=${code} maxLength=${14} onInput=${(e) => setCode(e.target.value)} /><button onClick=${() => { wifiroomLink.offerLink(code); setCode(''); setMode(null); }}>Send my identity there</button><button class="ghost" onClick=${() => setMode(null)}>Cancel</button></div>`}
+  <//>`;
 }
 
 // ---- Games: a scoreboard for the night and game sessions the host runs (games.js on the server) ----

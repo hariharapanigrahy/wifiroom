@@ -19,6 +19,12 @@ const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, m
 // Channel names look like Slack's: lowercase, digits, dashes.
 const slug = (s) => clean(s, 40).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
 
+// Device linking: the new device shows a code; the old device seals its identity key under a key derived from
+// that code and leaves the sealed blob here under a token also derived from the code. This never sees the key.
+const links = new Map(); // token -> { box, nonce, at }
+const LINK_TTL = 2 * 60_000;
+const isB64 = (s, max) => typeof s === 'string' && s.length <= max && /^[A-Za-z0-9+/=]+$/.test(s);
+
 export async function startChannels({ dataDir, io }) {
   const db = await JSONFilePreset(path.join(dataDir, 'channels.json'), { users: {}, channels: {}, messages: {} });
   const { users, channels, messages } = db.data;
@@ -39,7 +45,7 @@ export async function startChannels({ dataDir, io }) {
   const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: EVERYONE.includes(ch.id) ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false });
   const listFor = (uid) => Object.values(channels).filter((ch) => canSee(ch, uid)).map((ch) => view(ch, uid));
   const room = (cid) => `ch:${cid}`;
-  const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host }]));
+  const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host, tag: id.slice(0, 4) }]));
   const online = new Map(); // uid -> count of open pages
 
   // Everyone's channel list and the people list, after anything that changes them.
@@ -56,7 +62,10 @@ export async function startChannels({ dataDir, io }) {
       const uid = idOf(key);
       const u = (users[uid] ??= { name: '', key, seen: 0, host: false });
       const cleanName = clean(name, 40);
-      if (cleanName) u.name = cleanName;
+      // One name per person in this room, so nobody can pass for someone else.
+      const taken = cleanName && Object.entries(users).find(([id, x]) => id !== uid && x.name.toLowerCase() === cleanName.toLowerCase());
+      if (taken) return ack?.({ ok: false, error: `"${cleanName}" is already someone here; pick another name (your own code: #${uid.slice(0, 4)})`, taken: true });
+      if (cleanName && !taken) u.name = cleanName;
       if (!u.name) return ack?.({ ok: false, error: 'Pick a name first' });
       u.seen = Date.now();
       if (isHost) u.host = true;
@@ -80,6 +89,25 @@ export async function startChannels({ dataDir, io }) {
     socket.on('disconnect', () => { leaveAll(); save(); announce(); });
 
     const me = () => socket.data.uid && users[socket.data.uid] ? socket.data.uid : null;
+
+    // ---- device linking (see the note at the top) ----
+    socket.on('link-offer', ({ token, box, nonce } = {}, ack) => {
+      if (!me() || !isB64(token, 32) || !isB64(box, 4000) || !isB64(nonce, 40)) return ack?.({ ok: false, error: 'bad link' });
+      for (const [t, l] of links) if (Date.now() - l.at > LINK_TTL) links.delete(t);
+      if (links.size > 100) return ack?.({ ok: false, error: 'Too many links waiting; try again in a minute' });
+      links.set(token, { box, nonce, at: Date.now() });
+      ack?.({ ok: true });
+    });
+    let claims = { at: 0, n: 0 };
+    socket.on('link-claim', ({ token } = {}, ack) => {
+      const now = Date.now();
+      if (now - claims.at > 60_000) claims = { at: now, n: 0 };
+      if (++claims.n > 40) return ack?.({ ok: false, error: 'Slow down' }); // polling every 2 s plus a few guesses, nothing more
+      const l = isB64(token, 32) ? links.get(token) : null;
+      if (!l || now - l.at > LINK_TTL) return ack?.({ ok: false, waiting: true });
+      links.delete(token); // single use
+      ack?.({ ok: true, box: l.box, nonce: l.nonce });
+    });
     const chan = (cid) => (typeof cid === 'string' ? channels[cid] : undefined);
 
     socket.on('channel-create', ({ name, kind, members, topic, hostOnly } = {}, ack) => {

@@ -10,8 +10,56 @@ const isPublic = (c) => c.kind === 'public';
 function identify() {
   const name = myName();
   if (!name) return;
-  socket.emit('identify', { key: myChatKey(), name }, (r) => { if (r?.ok) { ch.me = r.uid; ch.host = r.host; renderChats(); } });
+  socket.emit('identify', { key: myChatKey(), name }, (r) => {
+    if (r?.ok) { ch.me = r.uid; ch.host = r.host; ch.nameError = null; }
+    else if (r?.taken) { ch.nameError = r.error; save('wifiroom.myName', ''); toast(`⚠️ ${r.error}`); }
+    renderChats();
+  });
 }
+const nameTag = (uid) => `#${String(uid).slice(0, 4)}`; // a fingerprint of the key, shown next to names; it can't be chosen
+
+// ---- Linking a device: move this identity (its key) to another device. The new device shows a 12-character
+// code; on the old device you type it. The key travels sealed under a key derived from the code, via the room,
+// which only sees an opaque blob under a token also derived from the code. ----
+const linkKeys = (code) => {
+  const norm = code.toUpperCase().replace(/[^A-Z2-9]/g, '');
+  const h = nacl.hash(new TextEncoder().encode(`wifiroom-link:${norm}`));
+  return { key: h.slice(0, 32), token: toB64(nacl.hash(new TextEncoder().encode(`wifiroom-token:${norm}`)).slice(0, 16)) };
+};
+const newLinkCode = () => { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const b = nacl.randomBytes(12); return [...b].map((x) => A[x % 32]).join('').replace(/(.{4})(?=.)/g, '$1-'); };
+const link = { code: null, timer: null, done: false };
+// New device: show a code and wait for the old device to send the sealed key.
+function startLinkWait() {
+  link.code = newLinkCode(); link.done = false;
+  const { key, token } = linkKeys(link.code);
+  const started = Date.now();
+  clearInterval(link.timer);
+  link.timer = setInterval(() => {
+    if (Date.now() - started > 2 * 60_000) { clearInterval(link.timer); link.code = null; renderChats(); return; }
+    socket.emit('link-claim', { token }, (r) => {
+      if (!r?.ok) return;
+      clearInterval(link.timer);
+      const plain = nacl.secretbox.open(fromB64(r.box), fromB64(r.nonce), key);
+      if (!plain) { toast('⚠️ That link didn\'t check out'); link.code = null; renderChats(); return; }
+      const { secret, name } = JSON.parse(new TextDecoder().decode(plain));
+      save('wifiroom.chatSecret', secret); save('wifiroom.myName', name);
+      localStorage.removeItem('wifiroom.chats'); localStorage.removeItem('wifiroom.chatPins'); // private chats don't move; they stay on the old device
+      link.done = true; renderChats();
+      toast(`✅ This device is now ${name}`);
+      setTimeout(() => location.reload(), 1200);
+    });
+  }, 2000);
+  renderChats();
+}
+// Old device: seal this identity for the device showing `code`.
+function offerLink(code) {
+  if (code.replace(/[^A-Za-z2-9]/g, '').length !== 12) return toast('The code is 12 characters');
+  const { key, token } = linkKeys(code);
+  const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+  const plain = new TextEncoder().encode(JSON.stringify({ secret: toB64(chatKeyPair.secretKey), name: myName() }));
+  socket.emit('link-offer', { token, nonce: toB64(nonce), box: toB64(nacl.secretbox(plain, nonce, key)) }, (r) => toast(r?.ok ? '📲 Sent. The other device picks it up within a few seconds.' : `⚠️ ${r?.error}`));
+}
+window.wifiroomLink = { startLinkWait, offerLink, linkKeys, newLinkCode, link };
 socket.on('hello', () => setTimeout(identify, 100)); // after chat.js has registered the key
 socket.on('you', identify);
 socket.on('channels', ({ list, people }) => { ch.list = list; ch.people = people; renderChats(); });
@@ -55,7 +103,7 @@ function channelSection() {
     const name = el('input', { placeholder: 'Your name', maxLength: 40, value: myName() });
     name.dataset.keep = '1';
     const go = btn('Join channels', () => { save('wifiroom.myName', name.value.trim()); identify(); });
-    return [h3('Channels'), el('p', { className: 'note', textContent: 'Channels are kept on the device hosting the room, so everyone sees the same history.' }), el('div', { className: 'row' }, name, go)];
+    return [h3('Channels'), el('p', { className: 'note', textContent: ch.nameError ?? 'Channels are kept on the device hosting the room, so everyone sees the same history.' }), el('div', { className: 'row' }, name, go)];
   }
   const row = (c) => el('button', { className: `chat-row${view.chatId === c.id ? ' on' : ''}`, type: 'button', onclick: () => openChannel(c.id) },
     el('span', {}, isPublic(c) ? '#' : '🔒'),
@@ -126,7 +174,7 @@ function channelScreen(body, sub, back, form) {
     ...(ch.more[c.id] ? [el('p', { style: 'text-align:center' }, btn('Earlier messages', () => loadOlder(c.id), 'ghost'))] : []),
     ...(list.length ? list.map((m) => m.system ? el('div', { className: 'msg system', textContent: m.text })
       : el('div', { className: `msg${m.from === ch.me ? ' mine' : ''}` },
-        ...(m.from !== ch.me ? [el('span', { className: 'meta', textContent: nameOfUid(m.from) })] : []),
+        ...(m.from !== ch.me ? [el('span', { className: 'meta', textContent: `${nameOfUid(m.from)} ${nameTag(m.from)}` })] : []),
         m.text,
         el('span', { className: 'meta', textContent: new Date(m.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) })))
       : [el('p', { className: 'note', textContent: c.host ? 'Announcements from the host appear here.' : 'No messages yet.' })]));
