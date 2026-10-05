@@ -103,6 +103,19 @@
     .msg.system { max-width: none; background: none; border: 0; color: var(--muted); font-size: 12px; text-align: center; }
     .msg a { color: var(--accent); }
     #chats details { font-size: 12px; color: var(--muted); }
+    .msg .acts { display: none; gap: 2px; margin: 2px 0; } .msg:hover .acts, .msg:focus-within .acts { display: flex; flex-wrap: wrap; }
+    @media (hover: none) { .msg .acts { display: flex; flex-wrap: wrap; } }
+    .msg .acts .emoji { padding: 1px 5px; font-size: 15px; }
+    .msg .reacts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .msg .react { background: #ffffff10; border: 1px solid var(--hair); color: var(--ink); padding: 1px 7px; font-size: 12px; border-radius: 10px; }
+    .msg .react.on { border-color: var(--accent); background: #f2b84b22; }
+    .msg.tome { border-color: var(--accent); background: #2f2618; } .msg.pinned { border-left: 3px solid var(--accent); }
+    .msg .mention { color: var(--accent); font-weight: normal; }
+    .newline { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: 11px; margin: 8px 0; }
+    .newline::before, .newline::after { content: ''; flex: 1; border-top: 1px solid var(--warn); }
+    .badge.at { background: var(--accent); color: #1b1420; }
+    .suggest { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px 14px; }
+    #chats .pins { padding: 4px 14px; }
     #chats details li { margin: 3px 0; }
     @media (max-width: 760px) {
       #chats { grid-template-columns: 1fr; }

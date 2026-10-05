@@ -63,17 +63,41 @@ function offerLink(code) {
 window.wifiroomLink = { startLinkWait, offerLink, linkKeys, newLinkCode, link };
 socket.on('hello', () => setTimeout(identify, 100)); // after chat.js has registered the key
 socket.on('you', identify);
-socket.on('channels', ({ list, people, locked }) => { ch.list = list; ch.people = people; ch.locked = !!locked; renderChats(); });
+// Unread counts come from the host (per person, so they survive a reload); `read` is sent when a channel is open.
+socket.on('channels', ({ list, people, locked }) => { ch.list = list; ch.people = people; ch.locked = !!locked; for (const c of list) ch.unread[c.id] = c.unread ?? 0; renderChats(); });
+const channelOpen = (id) => view.screen === 'channel' && view.chatId === id && $('chats').classList.contains('open') && !document.hidden;
+const markRead = (id) => { const last = ch.msgs[id]?.at(-1); if (last) socket.emit('channel-read', { id, ts: last.ts }); };
 socket.on('channel-msg', ({ channel, message }) => {
   (ch.msgs[channel] ??= []).push(message);
-  const open = view.screen === 'channel' && view.chatId === channel && $('chats').classList.contains('open');
-  if (!open && message.from !== ch.me) {
+  if (channelOpen(channel)) markRead(channel);
+  else if (message.from !== ch.me) {
     ch.unread[channel] = (ch.unread[channel] ?? 0) + 1;
-    if (!message.system) { toast(`#${channel} · ${nameOfUid(message.from)}: ${message.text.slice(0, 60)}`); if (document.hidden) notify(`#${channel}: ${nameOfUid(message.from)}`); }
+    if (!message.system && !message.mentions?.includes(ch.me)) { toast(`#${channel} · ${nameOfUid(message.from)}: ${message.text.slice(0, 60)}`); if (document.hidden) notify(`#${channel}: ${nameOfUid(message.from)}`); }
   }
   renderChats();
 });
-
+socket.on('channel-msg-update', ({ channel, message }) => {
+  const list = ch.msgs[channel]; if (!list) return;
+  const i = list.findIndex((m) => m.id === message.id); if (i >= 0) list[i] = message;
+  renderChats();
+});
+socket.on('channel-mention', ({ channel, by, text }) => {
+  toast(`@ ${by} mentioned you in #${channel}: ${text.slice(0, 60)}`); navigator.vibrate?.([80, 40, 80]);
+  if (document.hidden || !channelOpen(channel)) notify(`${by} mentioned you in #${channel}`);
+});
+const typing = {}; // channel -> { name -> until }
+socket.on('channel-typing', ({ channel, uid, name }) => {
+  (typing[channel] ??= {})[name] = Date.now() + 3000;
+  if (channelOpen(channel)) renderTyping(channel);
+  setTimeout(() => channelOpen(channel) && renderTyping(channel), 3100);
+});
+function renderTyping(id) {
+  const now = Date.now(), who = Object.entries(typing[id] ?? {}).filter(([, t]) => t > now).map(([n]) => n);
+  let bar = $('chats-typing'); if (!bar) { bar = el('div', { id: 'chats-typing', className: 'note', style: 'padding:0 14px 4px;min-height:16px' }); $('chats-form').before(bar); }
+  bar.textContent = who.length ? `${who.join(', ')} ${who.length > 1 ? 'are' : 'is'} typing…` : '';
+}
+window.addEventListener('focus', () => { if (view.screen === 'channel' && view.chatId) markRead(view.chatId); });
+const REACT = ['👍', '❤️', '😂', '🔥', '👀', '🎉'];
 const channelUnread = () => Object.values(ch.unread).reduce((a, b) => a + b, 0);
 
 function openChannel(id) {
@@ -81,9 +105,11 @@ function openChannel(id) {
   if (!c) return;
   if (!c.joined) return socket.emit('channel-join', { id }, (r) => (r.ok ? openChannel(id) : toast(`⚠️ ${r.error}`)));
   view.screen = 'channel'; view.chatId = id;
+  ch.openedAt = ch.unread[id] ? (c.lastRead ?? 0) : 0; // where the "new messages" line goes
   ch.unread[id] = 0;
   showPane('chats');
-  if (!ch.msgs[id]) socket.emit('channel-history', { id }, (r) => { if (r.ok) { ch.msgs[id] = r.messages; ch.more[id] = r.more; renderChats(); } });
+  if (!ch.msgs[id]) socket.emit('channel-history', { id }, (r) => { if (r.ok) { ch.msgs[id] = r.messages; ch.more[id] = r.more; renderChats(); markRead(id); } });
+  else markRead(id);
   renderChats();
   $('chats-text').focus();
 }
@@ -109,7 +135,7 @@ function channelSection() {
   const row = (c) => el('button', { className: `chat-row${view.chatId === c.id ? ' on' : ''}`, type: 'button', onclick: () => openChannel(c.id) },
     el('span', {}, isPublic(c) ? '#' : '🔒'),
     el('span', { className: 'who' }, c.name, el('div', { textContent: c.topic || `${c.members.length} people${c.joined ? '' : ' · tap to join'}` })),
-    el('span', { className: 'badge', textContent: ch.unread[c.id] ? String(ch.unread[c.id]) : '' }));
+    el('span', { className: `badge${c.mention ? ' at' : ''}`, textContent: ch.unread[c.id] ? (c.mention ? '@' : '') + ch.unread[c.id] : '' }));
   const pub = ch.list.filter(isPublic).sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.last - a.last));
   const priv = ch.list.filter((c) => !isPublic(c)).sort((a, b) => b.last - a.last);
   const online = Object.values(ch.people).filter((p) => p.online).length;
@@ -169,16 +195,32 @@ function channelScreen(body, sub, back, form) {
   }
   if (c.id !== 'general') tools.append(el('p', {}, btn('Leave', () => socket.emit('channel-leave', { id: c.id }, (r) => { if (r.ok) { delete ch.msgs[c.id]; openChats(); } else toast(`⚠️ ${r.error}`); }), 'ghost')));
   sub.replaceChildren(tools);
+  if (c.pinned?.length) tools.before(el('details', { className: 'pins' }, el('summary', { textContent: `📌 ${c.pinned.length} pinned` }), ...c.pinned.map((m) => el('p', { className: 'note', textContent: `${nameOfUid(m.from)}: ${m.text}` }))));
   const list = ch.msgs[c.id] ?? [];
   const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  let divider = false;
+  const rows = [];
+  for (const m of list) {
+    if (!divider && ch.openedAt && m.ts > ch.openedAt && m.from !== ch.me) { divider = true; rows.push(el('div', { className: 'newline', textContent: 'new messages' })); }
+    if (m.system) { rows.push(el('div', { className: 'msg system', textContent: m.text })); continue; }
+    if (m.deleted) { rows.push(el('div', { className: 'msg system', textContent: `${nameOfUid(m.from)} deleted a message` })); continue; }
+    const mine = m.from === ch.me, mentionsMe = m.mentions?.includes(ch.me);
+    const text = el('span', { className: 'text' }, ...m.text.split(/(@[^@\n]{1,40})/).map((part, i) => (i % 2 ? el('b', { className: 'mention', textContent: part }) : part)));
+    const acts = el('span', { className: 'acts' },
+      ...REACT.map((e) => btn(e, () => socket.emit('channel-react', { id: c.id, msg: m.id, emoji: e }), 'emoji sm')),
+      ...(ch.host || c.by === ch.me ? [btn(m.pinned ? '📌 unpin' : '📌', () => socket.emit('channel-pin', { id: c.id, msg: m.id, pinned: !m.pinned }), 'ghost sm')] : []),
+      ...(mine || ch.host ? [btn('🗑', () => confirm('Delete this message?') && socket.emit('channel-delete', { id: c.id, msg: m.id }), 'ghost sm')] : []));
+    const reacts = m.reactions && Object.keys(m.reactions).length ? el('div', { className: 'reacts' }, ...Object.entries(m.reactions).map(([e, who]) => btn(`${e} ${who.length}`, () => socket.emit('channel-react', { id: c.id, msg: m.id, emoji: e }), `react${who.includes(ch.me) ? ' on' : ''}`))) : null;
+    rows.push(el('div', { className: `msg${mine ? ' mine' : ''}${mentionsMe ? ' tome' : ''}${m.pinned ? ' pinned' : ''}` },
+      ...(!mine ? [el('span', { className: 'meta', textContent: `${nameOfUid(m.from)} ${nameTag(m.from)}${m.pinned ? ' · 📌' : ''}` })] : []),
+      text, acts,
+      el('span', { className: 'meta', textContent: new Date(m.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }),
+      ...(reacts ? [reacts] : [])));
+  }
   body.replaceChildren(
     ...(ch.more[c.id] ? [el('p', { style: 'text-align:center' }, btn('Earlier messages', () => loadOlder(c.id), 'ghost'))] : []),
-    ...(list.length ? list.map((m) => m.system ? el('div', { className: 'msg system', textContent: m.text })
-      : el('div', { className: `msg${m.from === ch.me ? ' mine' : ''}` },
-        ...(m.from !== ch.me ? [el('span', { className: 'meta', textContent: `${nameOfUid(m.from)} ${nameTag(m.from)}` })] : []),
-        m.text,
-        el('span', { className: 'meta', textContent: new Date(m.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) })))
-      : [el('p', { className: 'note', textContent: c.host ? 'Announcements from the host appear here.' : 'No messages yet.' })]));
+    ...(rows.length ? rows : [el('p', { className: 'note', textContent: c.host ? 'Announcements from the host appear here.' : 'No messages yet.' })]));
+  renderTyping(c.id);
   if (atBottom || body.dataset.chat !== c.id) body.scrollTop = body.scrollHeight;
   body.dataset.chat = c.id;
   $('chats-text').placeholder = c.host && !ch.host ? 'Only the host posts here' : `Message #${c.name}`;

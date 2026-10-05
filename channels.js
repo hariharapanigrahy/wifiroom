@@ -12,6 +12,7 @@ import { JSONFilePreset } from 'lowdb/node';
 const MAX_MESSAGES = 2000;  // kept per channel; older ones fall off
 const PAGE = 80;            // messages sent per history request
 const MAX_TEXT = 4000;
+const REACTIONS = ['👍', '❤️', '😂', '🔥', '👀', '🎉', '👋', '✅'];
 
 export const idOf = (key) => createHash('sha256').update(key).digest('hex').slice(0, 12);
 const isKey = (k) => typeof k === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(k);
@@ -43,7 +44,10 @@ export async function startChannels({ dataDir, io }) {
   const canSee = (ch, uid) => ch.kind === 'public' || ch.members.includes(uid);
   const EVERYONE = ['general', 'announcements']; // joined automatically
   const isMember = (ch, uid) => EVERYONE.includes(ch.id) || ch.members.includes(uid);
-  const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: EVERYONE.includes(ch.id) ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false });
+  const lastRead = (uid, cid) => users[uid]?.read?.[cid] ?? 0;
+  const unreadIn = (ch, uid) => { const since = lastRead(uid, ch.id); let n = 0, mention = false; for (const m of messages[ch.id] ?? []) if (m.ts > since && m.from !== uid && !m.deleted) { n++; if (m.mentions?.includes(uid)) mention = true; } return { n, mention }; };
+  const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: EVERYONE.includes(ch.id) ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false,
+    lastRead: lastRead(uid, ch.id), ...(isMember(ch, uid) ? { unread: unreadIn(ch, uid).n, mention: unreadIn(ch, uid).mention } : {}), pinned: (messages[ch.id] ?? []).filter((m) => m.pinned && !m.deleted).slice(-5) });
   const listFor = (uid) => Object.values(channels).filter((ch) => canSee(ch, uid)).map((ch) => view(ch, uid));
   const room = (cid) => `ch:${cid}`;
   const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host, tag: id.slice(0, 4), banned: !!u.banned }]));
@@ -206,8 +210,58 @@ export async function startChannels({ dataDir, io }) {
       if (ch.hostOnly && !users[uid].host) return ack?.({ ok: false, error: 'Only the host posts here' });
       const body = String(text ?? '').trim().slice(0, MAX_TEXT);
       if (!body) return ack?.({ ok: false, error: 'Empty' });
-      const m = post(ch, { from: uid, text: body });
+      // @mentions: "@Harry" or "@Pallavi (laptop)"; the longest name that matches wins. "@everyone" is for hosts.
+      const mentions = new Set();
+      const names = Object.entries(users).filter(([id]) => isMember(ch, id)).sort((a, b) => b[1].name.length - a[1].name.length);
+      for (const at of body.matchAll(/@([^@\n]{1,40})/g)) {
+        const rest = at[1].toLowerCase();
+        if (rest.startsWith('everyone') && users[uid].host) { for (const [id] of names) if (id !== uid) mentions.add(id); continue; }
+        const hit = names.find(([, u]) => u.name && rest.startsWith(u.name.toLowerCase()));
+        if (hit && hit[0] !== uid) mentions.add(hit[0]);
+      }
+      const m = post(ch, { from: uid, text: body, ...(mentions.size && { mentions: [...mentions] }) });
+      for (const s of io.sockets.sockets.values()) if (mentions.has(s.data.uid)) s.emit('channel-mention', { channel: ch.id, from: uid, by: users[uid].name, text: body.slice(0, 120) });
       ack?.({ ok: true, id: m.id });
+    });
+
+    // Reactions, deleting, pinning: changes go out to the channel as 'channel-msg-update'.
+    const findMsg = (cid, mid) => (messages[cid] ?? []).find((m) => m.id === mid && !m.system);
+    const update = (cid, m) => { io.to(room(cid)).emit('channel-msg-update', { channel: cid, message: m }); save(); };
+    socket.on('channel-react', ({ id, msg, emoji } = {}, ack) => {
+      const uid = me(), ch = chan(id), m = ch && findMsg(ch.id, msg);
+      if (!uid || !ch || !isMember(ch, uid) || !m || !REACTIONS.includes(emoji)) return ack?.({ ok: false });
+      m.reactions ??= {};
+      const who = (m.reactions[emoji] ??= []);
+      who.includes(uid) ? who.splice(who.indexOf(uid), 1) : who.push(uid);
+      if (!who.length) delete m.reactions[emoji];
+      update(ch.id, m); ack?.({ ok: true });
+    });
+    socket.on('channel-delete', ({ id, msg } = {}, ack) => {
+      const uid = me(), ch = chan(id), m = ch && findMsg(ch.id, msg);
+      if (!uid || !m || !(m.from === uid || users[uid].host)) return ack?.({ ok: false, error: 'Not yours to delete' });
+      Object.assign(m, { deleted: true, text: '', reactions: undefined, pinned: undefined, mentions: undefined });
+      update(ch.id, m); announce(); ack?.({ ok: true });
+    });
+    socket.on('channel-pin', ({ id, msg, pinned } = {}, ack) => {
+      const uid = me(), ch = chan(id), m = ch && findMsg(ch.id, msg);
+      if (!uid || !ch || !m || !(users[uid].host || ch.by === uid)) return ack?.({ ok: false, error: 'Only the host or whoever made the channel pins' });
+      m.pinned = !!pinned || undefined;
+      update(ch.id, m); announce(); ack?.({ ok: true });
+    });
+    // Read position: unread counts come from here, so they survive a reload.
+    socket.on('channel-read', ({ id, ts } = {}) => {
+      const uid = me(), ch = chan(id);
+      if (!uid || !ch || !Number.isFinite(ts)) return;
+      (users[uid].read ??= {})[ch.id] = Math.max(users[uid].read[ch.id] ?? 0, ts);
+      save();
+      socket.emit('channels', { list: listFor(uid), people: peopleView(), locked: db.data.locked });
+    });
+    let typedAt = 0;
+    socket.on('channel-typing', ({ id } = {}) => {
+      const uid = me(), ch = chan(id);
+      if (!uid || !ch || !isMember(ch, uid) || Date.now() - typedAt < 1500) return;
+      typedAt = Date.now();
+      socket.to(room(ch.id)).emit('channel-typing', { channel: ch.id, uid, name: users[uid].name });
     });
 
     // Older messages, newest page first; `before` is a message timestamp.

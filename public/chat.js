@@ -183,7 +183,8 @@ function openDm(id) {
 function renderChats() {
   updateBadge();
   if (!$('chats').classList.contains('open')) return;
-  if ($('chats').contains(document.activeElement) && document.activeElement.dataset.keep) return; // typing
+  // Don't clobber a form someone is typing in (a group or channel name); the message box itself is fine to render around.
+  if ($('chats').contains(document.activeElement) && document.activeElement.dataset.keep && document.activeElement.id !== 'chats-text') return;
   rememberNames();
   $('chats').classList.toggle('conv', view.screen !== 'list');
   renderChatList();
@@ -283,7 +284,22 @@ $('chats-back').onclick = () => openChats();
 $('chats-attach').onclick = () => $('chats-file').click();
 $('chats-file').onchange = () => { const chat = chats[view.chatId]; if (chat) shareFiles(chat, [...$('chats-file').files]); $('chats-file').value = ''; };
 $('chats-call').onclick = () => { const chat = chats[view.chatId]; if (chat) startCall(chat); };
-$('chats-form').onsubmit = (e) => { e.preventDefault(); (view.screen === 'channel' ? sendToChannel(view.chatId, $('chats-text').value) : send($('chats-text').value)); $('chats-text').value = ''; $('chats-text').focus(); };
+$('chats-form').onsubmit = (e) => { e.preventDefault(); (view.screen === 'channel' ? sendToChannel(view.chatId, $('chats-text').value) : send($('chats-text').value)); $('chats-text').value = ''; $('chats-text').focus(); hideSuggest(); };
+// While typing in a channel: a typing signal, and @name suggestions after an "@".
+$('chats-text').addEventListener('input', () => {
+  if (view.screen !== 'channel') return;
+  socket.emit('channel-typing', { id: view.chatId });
+  const v = $('chats-text').value, at = v.lastIndexOf('@');
+  if (at < 0 || /\s/.test(v.slice(at + 1)) && v.slice(at + 1).length > 25) return hideSuggest();
+  const q = v.slice(at + 1).toLowerCase();
+  const c = (window.ch?.list ?? []).find((x) => x.id === view.chatId);
+  const names = Object.entries(window.ch?.people ?? {}).filter(([id, p]) => id !== window.ch.me && (!c || c.members.includes(id)) && p.name.toLowerCase().startsWith(q)).map(([, p]) => p.name).slice(0, 6);
+  if (window.ch?.host && 'everyone'.startsWith(q)) names.unshift('everyone');
+  if (!names.length) return hideSuggest();
+  let box = $('chats-suggest'); if (!box) { box = el('div', { id: 'chats-suggest', className: 'suggest' }); $('chats-form').before(box); }
+  box.replaceChildren(...names.map((n) => btn(`@${n}`, () => { $('chats-text').value = `${v.slice(0, at)}@${n} `; $('chats-text').focus(); hideSuggest(); }, 'ghost sm')));
+});
+function hideSuggest() { $('chats-suggest')?.remove(); }
 
 // Offer our key to the room (visitors send it with "join"; the host page has no join step) and keep the
 // chats screen in step with who is around.
