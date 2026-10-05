@@ -319,7 +319,8 @@ function hangUp() {
 
 // Who may be in the call we're in: the chat's members, or whoever the host lists for the channel call.
 const inCall = (dev) => !!call && (call.channel ? call.members.includes(dev) : !!chats[call.chatId]?.members.includes(dev));
-const devOfUid = (uid) => [...state.devices.values()].find((d) => d.uid === uid && d.chatKey)?.id;
+// Someone's device, if they have the room open now (channels know people by uid; connections go by device).
+const deviceOf = (uid) => [...state.devices.values()].find((d) => d.uid === uid && d.chatKey);
 
 // ---- channel calls: the host keeps the roster (channels.js); voices still go browser to browser ----
 // The device with the smaller id offers to each newcomer; the other side adds its voice in the answer.
