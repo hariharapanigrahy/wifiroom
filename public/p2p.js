@@ -44,11 +44,11 @@ function peer(id) {
   const p = { pc, polite: myId() > id, making: false, ignore: false, sender: null, audio: null };
   peers.set(id, p);
   pc.onnegotiationneeded = async () => {
-    try { p.making = true; await pc.setLocalDescription(); signal(id, { sdp: pc.localDescription, call: call?.id }); } catch (e) { console.warn('WebRTC', e); } finally { p.making = false; }
+    try { p.making = true; await pc.setLocalDescription(); signal(id, { sdp: pc.localDescription, call: call?.id, show: p.showStream }); } catch (e) { console.warn('WebRTC', e); } finally { p.making = false; }
   };
   pc.onicecandidate = ({ candidate }) => candidate && signal(id, { ice: candidate });
   pc.ondatachannel = ({ channel }) => receiveChannel(id, channel);
-  pc.ontrack = ({ streams }) => hear(id, p, streams[0]);
+  pc.ontrack = ({ streams }) => { if (!showStreamArrived(p, streams[0])) hear(id, p, streams[0]); };
   pc.onconnectionstatechange = () => {
     console.log('WebRTC', personName(id), pc.connectionState);
     if (pc.connectionState === 'failed') { pc.close(); if (call?.joined.has(id)) addCallNote(`⚠️ No direct connection to ${personName(id)}: this Wi-Fi keeps the two devices apart.`); }
@@ -67,6 +67,7 @@ socket.on('signal', async ({ from, nonce, box }) => {
       const collision = msg.sdp.type === 'offer' && (p.making || pc.signalingState !== 'stable');
       p.ignore = !p.polite && collision;
       if (p.ignore) return;
+      if (msg.show) p.remoteShowStream = msg.show; // the owner's show stream, so ontrack can tell it from a call
       await pc.setRemoteDescription(msg.sdp);
       if (msg.sdp.type === 'offer') {
         // Someone in our call connecting (in a group, people already talking reach each newcomer): answer with our voice.
@@ -333,3 +334,85 @@ function renderCall() {
   document.body.append(el('div', { id: 'call-bar' }, el('span', { textContent: `📞 ${chat ? chatName(chat) : 'Call'} · ${who}` }), mute, btn('Hang up', hangUp)));
 }
 window.addEventListener('pagehide', hangUp);
+
+// ---- Live: play a video or song from this device, or share the screen, to everyone who watches ----
+// The owner adds the stream's tracks to a connection per viewer and offers; viewers only answer, so offers
+// never cross. The stream id travels in the offer so the viewer can tell the show from a call.
+const live = { show: null, watching: null, remote: null, element: null }; // show: { id, kind, title, stream, viewers: Set<deviceId>, source }
+window.live = live;
+
+async function startShow(kind, file) {
+  if (live.show) stopShow();
+  let stream, source = null, title;
+  try {
+    if (kind === 'screen') {
+      if (!navigator.mediaDevices?.getDisplayMedia) return toast('⚠️ Screen sharing needs a laptop browser');
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+      title = 'Screen';
+      stream.getVideoTracks()[0].onended = () => stopShow(); // the browser's own "stop sharing" button
+    } else {
+      source = el(kind === 'audio' ? 'audio' : 'video', { src: URL.createObjectURL(file), controls: true, playsInline: true, style: 'width:100%;max-height:60vh;background:#000;border-radius:8px' });
+      await source.play();
+      stream = source.captureStream ? source.captureStream() : source.mozCaptureStream();
+      title = file.name;
+    }
+  } catch (e) { return toast(`⚠️ Couldn't start: ${e.message}`); }
+  const r = await new Promise((ok) => socket.emit('show-start', { title, kind }, ok));
+  if (!r?.ok) { stream.getTracks().forEach((t) => t.stop()); return toast(`⚠️ ${r?.error}`); }
+  live.show = { id: r.id, kind, title, stream, viewers: new Set(), source };
+  toast(`📺 Live: ${title}. People in the room can press Watch.`);
+  window.draw?.();
+}
+
+function stopShow() {
+  const sh = live.show;
+  if (!sh) return;
+  for (const id of sh.viewers) dropViewer(id);
+  sh.stream.getTracks().forEach((t) => t.stop());
+  sh.source?.pause();
+  socket.emit('show-stop', { id: sh.id });
+  live.show = null;
+  window.draw?.();
+}
+
+function dropViewer(deviceId) {
+  const p = peers.get(deviceId);
+  if (p?.showSenders) { for (const s of p.showSenders) { try { p.pc.removeTrack(s); } catch {} } p.showSenders = null; }
+  live.show?.viewers.delete(deviceId);
+}
+
+socket.on('show-viewer', ({ id, to }) => {
+  const sh = live.show;
+  const dev = deviceOf(to);
+  if (!sh || sh.id !== id || !dev) return;
+  const p = peer(dev.id);
+  p.showStream = sh.stream.id; // goes out with the offer
+  p.showSenders = sh.stream.getTracks().map((t) => p.pc.addTrack(t, sh.stream));
+  sh.viewers.add(dev.id);
+  window.draw?.();
+});
+socket.on('show-left', ({ to }) => { const dev = deviceOf(to); if (dev) dropViewer(dev.id); window.draw?.(); });
+
+async function watchShow(show) {
+  if (live.watching) leaveShow();
+  const r = await new Promise((ok) => socket.emit('show-watch', { id: show.id }, ok));
+  if (!r?.ok) return toast(`⚠️ ${r?.error}`);
+  const dev = deviceOf(show.byId);
+  live.watching = { id: show.id, byId: show.byId, deviceId: dev?.id, title: show.title };
+  window.draw?.();
+}
+function leaveShow() {
+  const w = live.watching;
+  if (!w) return;
+  socket.emit('show-leave', { id: w.id });
+  live.watching = null; live.remote = null;
+  window.draw?.();
+}
+// Called from the signal handler: an offer that names a show stream; the matching stream arrives in ontrack.
+function showStreamArrived(p, stream) {
+  if (!live.watching || p.remoteShowStream !== stream.id) return false;
+  live.remote = stream;
+  window.draw?.();
+  return true;
+}
+window.addEventListener('pagehide', () => { stopShow(); leaveShow(); });

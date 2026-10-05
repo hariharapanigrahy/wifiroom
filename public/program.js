@@ -165,7 +165,23 @@ function People() {
     ${amHost() && banned.length > 0 && html`<h3>Removed</h3>${banned.map((p) => html`<${Person} p=${p} key=${p.id} />`)}`}
     <p class="note">💬 opens a private, end-to-end encrypted chat. 📞 calls them. People show up here once they've picked a name. The #code next to a name comes from their key and can't be chosen: same name, different code, different person.</p>
     <${LinkDevice} />
+    ${amHost() && html`<${CleanUp} />`}
   </div>`;
+}
+
+// Host clean-up: start a fresh night without reinstalling anything.
+function CleanUp() {
+  const go = (label, event, payload) => () => confirm(`${label}? This can't be undone.`) && act(event, payload).then((r) => r.ok && toast(`🧹 ${label}: done`));
+  return html`<${Card} title="Clean up (host)">
+    <div class="row">
+      <button class="ghost sm" onClick=${go('End all games', 'games-clear', { scores: false })}>End all games</button>
+      <button class="ghost sm" onClick=${go('End all games and clear the scoreboard', 'games-clear', { scores: true })}>Games + scoreboard</button>
+      <button class="ghost sm" onClick=${go('Clear the program (schedule, polls, sign-ups)', 'program-clear', {})}>Clear program</button>
+      <button class="ghost sm" onClick=${go('Clear all channel messages and the channels people made', 'channels-clear', { people: false })}>Clear channels</button>
+      <button class="ghost sm" onClick=${go('Forget everyone except you (names, bans), and clear channels', 'channels-clear', { people: true })}>Forget everyone</button>
+    </div>
+    <p class="note">Shares and live shows end on their own when people close the page. Nothing here touches other people's devices.</p>
+  <//>`;
 }
 
 // Carry this identity to another device (see channels.js).
@@ -384,7 +400,7 @@ function Holdem({ g }) {
 function GameView({ g }) {
   const body = { quiz: Quiz, chess: ChessBoard, ludo: LudoBoard, eights: Eights, holdem: Holdem, likely: Likely }[g.type] ?? Likely;
   const bodyEl = html`<${body} g=${g} />`;
-  return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${g.runs && html`<button class="ghost sm" onClick=${() => confirm('End this game?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
+  return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${g.canEnd && html`<button class="ghost sm" onClick=${() => confirm('End this game for everyone in it?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
     ${!g.joined && (!g.seats || g.players.length < g.seats) && html`<p><button onClick=${() => act('game-join', { id: g.id })}>${g.seats ? 'Take a seat' : 'Join this game'}</button></p>`}
     ${(g.joined || g.runs || g.seats) && bodyEl}
     <p class="note">Playing: ${g.players.map((p) => p.name).join(', ') || 'nobody yet'}</p>
@@ -483,6 +499,28 @@ async function getFile(sh, f) {
   if (dev) openDm(dev.id);
 }
 
+// ---- Live: a show from this device (a video, a song, the screen) streamed to everyone who watches ----
+function LiveCard({ shows }) {
+  const L = window.live;
+  const mine = L?.show, w = L?.watching;
+  const others = shows.filter((s) => !s.mine);
+  const canScreen = !!navigator.mediaDevices?.getDisplayMedia;
+  return html`<${Card} title="📺 Live" right=${mine && html`<span class="note">${mine.viewers.size} watching</span>`}>
+    ${mine ? html`<div><div class="row"><b style="flex:1">You're live: ${mine.title}</b><button class="ghost sm" onClick=${() => stopShow()}>⏹ Stop</button></div>
+        <div class="liveplayer" ref=${(n) => { if (n && mine.source && !n.contains(mine.source)) n.replaceChildren(mine.source); }}></div>
+        <p class="note">${mine.kind === 'screen' ? 'Everyone who watches sees your screen.' : 'Your player is the remote: pause or seek here and everyone follows.'}</p></div>`
+      : html`<div class="row">
+        <label class="btn upbtn">▶ Play a video or song for everyone<input type="file" accept="video/*,audio/*" onChange=${(e) => { const f = e.target.files[0]; if (f) startShow(f.type.startsWith('audio/') ? 'audio' : 'video', f); e.target.value = ''; }} /></label>
+        ${canScreen && html`<button class="ghost" onClick=${() => startShow('screen')}>🖥 Share my screen</button>`}
+        <span class="note" style="flex:1">Streamed from this device to each viewer; nothing is uploaded. Works best with a handful of viewers.</span></div>`}
+    ${w && html`<div style="margin-top:10px"><div class="row"><b style="flex:1">Watching: ${w.title}</b><button class="ghost sm" onClick=${() => leaveShow()}>Leave</button></div>
+      ${L.remote ? html`<video class="livevideo" autoplay playsinline controls ref=${(n) => { if (n && n.srcObject !== L.remote) { n.srcObject = L.remote; n.play().catch(() => {}); } }}></video>` : html`<p class="note">Connecting to ${shows.find((s) => s.id === w.id)?.by ?? 'the owner'}…</p>`}</div>`}
+    ${others.length > 0 && html`<div style="margin-top:8px">${others.map((s) => html`<div class="item" key=${s.id}><div class="when">${s.kind === 'screen' ? '🖥' : s.kind === 'audio' ? '🎵' : '🎬'}</div><div class="what"><b>${s.title}</b><div class="note">${s.by} · ${s.viewers} watching</div></div>
+      ${w?.id === s.id ? html`<span class="note">watching</span>` : html`<button class="sm" onClick=${() => watchShow(s)}>▶ Watch</button>`}</div>`)}</div>`}
+    ${!mine && !others.length && !w && html`<p class="note">Nobody is live right now.</p>`}
+  <//>`;
+}
+
 function Shares() {
   if (!me()) return html`<${NamePrompt} />`;
   const d = shr.data;
@@ -490,6 +528,7 @@ function Shares() {
   const mine = d.shares.filter((s) => s.mine), others = d.shares.filter((s) => !s.mine);
   const app = window.WiFiRoomFolder;
   return html`<div class="files program">
+    <${LiveCard} shows=${d.shows ?? []} />
     <div class="row" style="margin-bottom:10px">
       ${app?.pickFolder ? html`<button onClick=${() => app.pickFolder()}>📂 Allow a folder</button>` : window.showDirectoryPicker ? html`<button onClick=${pickFolderHandle}>📂 Allow a folder</button>` : html`<label class="btn upbtn">📂 Allow a folder<input type="file" webkitdirectory directory multiple onChange=${(e) => pickFolder(e.target)} /></label>`}
       <span class="note" style="flex:1">Nothing is uploaded anywhere. Files stay on your device; the room sees only the listing (up to ${MAX_SHARE_FILES} files), and a file is sent, encrypted, only to a person who asks for it. Stop any time. ${window.showDirectoryPicker || app ? '' : 'Your browser\'s folder prompt may say "upload"; it isn\'t one.'}</span>
@@ -507,6 +546,7 @@ function Shares() {
   </div>`;
 }
 
+window.draw = () => draw();
 const draw = () => {
   render(html`<${Shares} />`, document.getElementById('files'));
   render(html`<${Program} />`, document.getElementById('program'));

@@ -346,7 +346,7 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
   let dirty = null;
   const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
 
-  const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), byId: g.by, runs: g.by === uid || isHost(uid), created: g.created, ended: g.ended,
+  const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), byId: g.by, runs: g.by === uid || isHost(uid), canEnd: g.players.includes(uid) || g.by === uid, created: g.created, ended: g.ended,
     players: g.players.map((p) => ({ id: p, name: nameOf(p) })), joined: g.players.includes(uid), seats: TYPES[g.type].max ?? null,
     state: TYPES[g.type].view ? TYPES[g.type].view(g.state, uid, g) : g.state });
   const snapshot = (uid) => ({
@@ -391,9 +391,10 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
       TYPES[g.type].step(api, g.state, me, String(action), data, runs(g));
       save(); ack?.({ ok: true }); announce();
     });
+    // Only the people in a game end it: its players, or whoever started it (the quizmaster). Not the host.
     socket.on('game-end', ({ id: gid } = {}, ack) => {
-      const g = find(gid);
-      if (!g || !runs(g)) return ack?.({ ok: false, error: 'Only whoever started the game, or the host, can end it' });
+      const g = find(gid), me = uid();
+      if (!g || !me || !(g.players.includes(me) || g.by === me)) return ack?.({ ok: false, error: 'Only the people in this game can end it' });
       if (g) g.ended = Date.now();
       save(); ack?.({ ok: true }); announce();
     });
@@ -402,6 +403,14 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
       if (!host()) return ack?.({ ok: false, error: 'Only the host changes scores' });
       if (typeof who !== 'string') D.scores = {};
       else D.scores[who] = (D.scores[who] ?? 0) + (Number(points) || 0);
+      save(); ack?.({ ok: true }); announce();
+    });
+    // Host clean-up: end every game, or wipe the night's games and scores.
+    socket.on('games-clear', ({ scores } = {}, ack) => {
+      if (!host()) return ack?.({ ok: false, error: 'Only the host' });
+      for (const g of D.games) g.ended ??= Date.now();
+      D.games = [];
+      if (scores) D.scores = {};
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('games-get', (...args) => { const ack = args.find((a) => typeof a === 'function'); if (uid()) ack?.(snapshot(uid())); });

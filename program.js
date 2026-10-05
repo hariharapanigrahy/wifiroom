@@ -33,6 +33,11 @@ export async function startProgram({ dataDir, io, isHost, nameOf }) {
     const deny = (ack) => ack?.({ ok: false, error: 'Only the host can change the program' });
     const signedIn = (ack) => uid() || (ack?.({ ok: false, error: 'Pick a name first' }), false);
     const owns = (item) => host() || item?.by === uid(); // edits and deletions: the person who added it, or the host
+    socket.on('program-clear', (ack) => {
+      if (!host()) return deny(ack);
+      Object.assign(P, { title: '', schedule: [], polls: [], signups: [] });
+      save(); ack?.({ ok: true }); announce();
+    });
     socket.on('program-get', (...args) => { const ack = args.find((a) => typeof a === 'function'); if (uid()) ack?.(snapshot(uid())); });
 
     socket.on('program-title', ({ title } = {}, ack) => {

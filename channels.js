@@ -115,6 +115,16 @@ export async function startChannels({ dataDir, io }) {
       save(); ack?.({ ok: true }); announce();
     });
 
+    // Host clean-up: wipe messages (and channels people made), or forget everyone but the host.
+    socket.on('channels-clear', ({ people } = {}, ack) => {
+      const h = me();
+      if (!h || !users[h]?.host) return ack?.({ ok: false, error: 'Only the host' });
+      for (const id of Object.keys(channels)) { if (!EVERYONE.includes(id)) delete channels[id]; messages[id] = []; }
+      for (const id of Object.keys(messages)) if (!channels[id]) delete messages[id];
+      if (people) for (const [id, u] of Object.entries(users)) if (!u.host) { delete users[id]; for (const s of io.sockets.sockets.values()) if (s.data.uid === id) s.disconnect(true); }
+      save(); ack?.({ ok: true }); announce();
+    });
+
     // ---- device linking (see the note at the top) ----
     socket.on('link-offer', ({ token, box, nonce } = {}, ack) => {
       if (!me() || !isB64(token, 32) || !isB64(box, 4000) || !isB64(nonce, 40)) return ack?.({ ok: false, error: 'bad link' });
