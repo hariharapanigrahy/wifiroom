@@ -57,6 +57,13 @@ let initialized = false;
 const app = express();
 app.use(express.static(path.join(PKG_DIR, 'public')));
 app.use('/lib', express.static(PHASER_DIST));
+// Answers "is a room open here?" for laptops and the phone app looking for one (see bin/wifiroom.js). A phone
+// hosting an empty room hands over to a laptop's room or an older phone room, so this says which it is.
+const STARTED = Date.now();
+app.get('/room.json', (req, res) => res.json({
+  wifiroom: true, since: STARTED, phone: process.platform === 'android',
+  joined: [...io.sockets.sockets.values()].filter((s) => s.data.deviceId).length,
+}));
 app.get('/lib/nacl-fast.min.js', (req, res) => res.sendFile(path.join(NACL_DIR, 'nacl-fast.min.js'))); // private chat encryption
 const server = http.createServer(app);
 const io = new Server(server);
@@ -534,6 +541,18 @@ server.listen(PORT, HOST, () => {
   }
   console.log(`  💾 Your labels are saved in ${DATA_DIR}\n`);
   if (process.env.WIFIROOM_OPEN === '1') import('open').then(({ default: open }) => open(`http://localhost:${PORT}`)).catch(() => {});
+  // Lets another laptop or the phone app join this room instead of opening a second one. The address goes
+  // in TXT because Android names itself "localhost", and is announced again when the Wi-Fi address changes.
+  // Never the code: anyone on the Wi-Fi can read this.
+  let announced = null;
+  const announce = () => {
+    const url = `http://${selfIp()}:${PORT}/`;
+    if (announced?.url === url) return;
+    announced?.service.stop();
+    announced = { url, service: bonjour.publish({ name: `WiFiRoom ${randomInt(1e9)}`, type: 'wifiroom', port: PORT, txt: { url } }) };
+  };
+  announce();
+  setInterval(announce, 30_000);
 });
 // Reading the ARP table only shows devices this computer recently talked to. A gentle sweep (one ping per
 // address, in small batches) fills it in so quiet devices like TVs and speakers appear too.

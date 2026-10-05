@@ -26,12 +26,15 @@ WiFiRoom runs locally on your computer, and nothing leaves your network. It neve
 npx wifiroom              # just you
 npx wifiroom --share      # let people on your Wi-Fi join at your computer's IP
 npx wifiroom --port 5000  # use another port
+npx wifiroom --host       # open your own room even if one is already open on this Wi-Fi
 npx wifiroom --help
 ```
 
 Requires [Node.js](https://nodejs.org) 20 or newer.
 
 **Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi can join by opening your computer's IP address (e.g. `http://192.168.1.3`), no code needed. iPhones and laptops can also use `http://wifiroom.local`; most Android phones don't understand `.local` names. They can chat, send links and ring phones in the room, but device controls, IP and hardware addresses and the API stay on your computer. Add `--code` to also require a 6-digit code (new every start), and only use `--share` on networks you trust.
+
+**One room per Wi-Fi.** If someone on your Wi-Fi already has a shared room open (another laptop with `--share`, or the Android app), `npx wifiroom` joins theirs instead of starting a second one, and keeps running while you're in it (it opens the room through `http://localhost`, which is what lets calls use your microphone). The Android app does the same, and opens its own room only when it finds none it can reach. A phone hosting a room nobody has joined hands over to a laptop's room when one appears.
 
 ## Control your devices
 
