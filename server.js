@@ -367,6 +367,7 @@ io.on('connection', async (socket) => {
     const d = actor();
     if (!d || !allow('move', 100)) return;
     d.pos = clampTo(zoneOf(d), { x, y });
+    d.placed = true;
     broadcast();
   });
 
@@ -465,6 +466,7 @@ io.on('connection', async (socket) => {
     if (!host || !allow('action', 500)) return ack?.({ ok: false, error: 'Not allowed' });
     try {
       ack?.({ ok: true, message: await controlDevice(id, action, args) });
+    d.placed = true;
     } catch (err) {
       ack?.({ ok: false, error: err.message });
     }
@@ -579,11 +581,11 @@ function sweep() {
 }
 
 // Idle wandering, decided here so every viewer sees the same room. Awake characters take a few steps
-// within their zone now and then; sleeping ones and people who joined from a phone (they steer) stay put.
+// within their zone now and then; sleeping ones, people who joined (they steer) and anyone placed by hand stay put.
 setInterval(() => {
   let moved = false;
   for (const d of devices.values()) {
-    if (d.status !== 'here' || visitorsOf(d.id) || Math.random() > 0.3) continue;
+    if (d.status !== 'here' || d.placed || visitorsOf(d.id) || Math.random() > 0.3) continue;
     const step = () => (Math.random() - 0.5) * 3; // up to 1.5 tiles each way
     d.pos = clampTo(zoneOf(d), { x: d.pos.x + step(), y: d.pos.y + step() });
     moved = true;

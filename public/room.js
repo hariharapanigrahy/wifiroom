@@ -94,12 +94,12 @@ function syncRoom(list) {
 }
 
 function enter(d) {
-  const sprite = room.add.sprite(DOOR.x, DOOR.y, 'tiles', frameOf(d)).setScale(S).setInteractive({ draggable: state.host, useHandCursor: true });
+  const sprite = room.add.sprite(DOOR.x, DOOR.y, 'tiles', frameOf(d)).setScale(S).setInteractive({ useHandCursor: true });
   sprite.deviceId = d.id;
   // Phaser hears pointerup on the whole window, so only treat it as a click if the press started here.
-  sprite.on('pointerdown', () => { sprite.dragged = false; sprite.pressed = true; });
+  sprite.on('pointerdown', () => { sprite.dragged = false; sprite.pressed = true; holding = canDrag(sprite.deviceId); });
   sprite.on('pointerup', () => { if (sprite.pressed && !sprite.dragged) openPanel({ type: 'device', id: d.id }); sprite.pressed = false; });
-  room.input.on('pointerup', () => { sprite.pressed = false; });
+  room.input.on('pointerup', () => { sprite.pressed = false; holding = false; });
   const label = room.add.text(DOOR.x, DOOR.y, '', { fontFamily: 'monospace', fontSize: px(13), color: '#fff', backgroundColor: '#000a', padding: { x: 4, y: 1 } }).setOrigin(0.5, 1).setDepth(5);
   const zzz = room.add.text(0, 0, 'z', { fontFamily: 'monospace', fontSize: '16px', color: '#cfe3ff' }).setVisible(false).setDepth(5);
   room.tweens.add({ targets: zzz, alpha: 0.3, yoyo: true, repeat: -1, duration: 900 });
