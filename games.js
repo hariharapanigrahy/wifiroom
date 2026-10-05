@@ -340,13 +340,13 @@ const holdem = {
 
 const TYPES = { chess, ludo, eights, holdem, quiz, likely };
 
-export async function startGames({ dataDir, io, isHost, nameOf }) {
+export async function startGames({ dataDir, io, isHost, nameOf, say }) {
   const db = await JSONFilePreset(path.join(dataDir, 'games.json'), { scores: {}, games: [] });
   const D = db.data;
   let dirty = null;
   const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
 
-  const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), byId: g.by, runs: g.by === uid || isHost(uid), canEnd: g.players.includes(uid) || g.by === uid, created: g.created, ended: g.ended,
+  const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), byId: g.by, runs: g.by === uid || isHost(uid), canEnd: g.players.includes(uid) || g.by === uid, created: g.created, ended: g.ended, next: g.next ?? null,
     players: g.players.map((p) => ({ id: p, name: nameOf(p) })), joined: g.players.includes(uid), seats: TYPES[g.type].max ?? null,
     state: TYPES[g.type].view ? TYPES[g.type].view(g.state, uid, g) : g.state });
   const snapshot = (uid) => ({
@@ -355,6 +355,14 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
     scores: Object.entries(D.scores).map(([who, points]) => ({ id: who, name: nameOf(who), points })).sort((a, b) => b.points - a.points),
   });
   const announce = () => { for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('games', snapshot(s.data.uid)); };
+  // Game news goes to #general and, as a nudge, to everyone but the person it's about.
+  const notice = (text, except) => { say('general', text); for (const s of io.sockets.sockets.values()) if (s.data.uid && s.data.uid !== except) s.emit('game-notice', { text }); };
+  const label = (g) => `${TYPES[g.type].icon} ${g.title}${g.title === TYPES[g.type].name ? '' : ` (${TYPES[g.type].name})`}`;
+  const result = (g) => {
+    const r = g.state?.result; if (!r) return null;
+    const how = r.how ? ` by ${r.how}` : '';
+    return r.winner ? `🏆 ${nameOf(r.winner)} won ${label(g)}${how}` : `🤝 ${label(g)} ended in a draw${how}`;
+  };
 
   function attach(socket) {
     const uid = () => socket.data.uid;
@@ -369,7 +377,22 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
       const g = { id: id(), type, title: clean(title, 60) || TYPES[type].name, by: uid(), created: Date.now(), ended: null, players: [], state: TYPES[type].create() };
       D.games.unshift(g);
       D.games = D.games.slice(0, MAX_GAMES);
+      const t = TYPES[type];
+      notice(`${label(g)}: ${nameOf(uid())} is starting a game${t.max ? ` · ${t.min}–${t.max} seats` : ''}. Open Games to join.`, uid());
       save(); ack?.({ ok: true, id: g.id }); announce();
+    });
+    // Same game again, for the same people (seats in reverse order, so chess colours swap).
+    socket.on('game-rematch', ({ id: gid } = {}, ack) => {
+      const g = D.games.find((x) => x.id === gid), me = uid();
+      if (!g || !me || !g.players.includes(me)) return ack?.({ ok: false, error: 'Only the players can ask for a rematch' });
+      if (g.next) return ack?.({ ok: true, id: g.next });
+      if (!g.ended && !g.state?.result) return ack?.({ ok: false, error: 'This game is still on' });
+      const n = { id: id(), type: g.type, title: g.title, by: g.by, created: Date.now(), ended: null, players: [...g.players].reverse(), state: TYPES[g.type].create() };
+      g.next = n.id; g.ended ??= Date.now();
+      D.games.unshift(n);
+      D.games = D.games.slice(0, MAX_GAMES);
+      notice(`🔁 ${label(g)}: ${nameOf(me)} wants a rematch with ${g.players.filter((p) => p !== me).map(nameOf).join(', ')}.`, me);
+      save(); ack?.({ ok: true, id: n.id }); announce();
     });
     socket.on('game-join', ({ id: gid } = {}, ack) => {
       const g = find(gid);
@@ -388,7 +411,9 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
       if (!g.players.includes(me) && !host()) return ack?.({ ok: false, error: 'Join the game first' });
       if (TYPES[g.type].min && g.players.length < TYPES[g.type].min) return ack?.({ ok: false, error: `Needs ${TYPES[g.type].min} players` });
       const api = { players: g.players, names: Object.fromEntries(g.players.map((p) => [p, nameOf(p)])), award: (who, n) => { D.scores[who] = (D.scores[who] ?? 0) + n; } };
+      const had = !!g.state?.result;
       TYPES[g.type].step(api, g.state, me, String(action), data, runs(g));
+      if (!had && g.state?.result) notice(result(g));
       save(); ack?.({ ok: true }); announce();
     });
     // Only the people in a game end it: its players, or whoever started it (the quizmaster). Not the host.

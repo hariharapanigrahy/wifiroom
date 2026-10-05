@@ -74,7 +74,7 @@ const server = http.createServer(app);
 const io = new Server(server);
 const channelsOf = await startChannels({ dataDir: DATA_DIR, io });
 const programOf = await startProgram({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf, say: channelsOf.say });
-const gamesOf = await startGames({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
+const gamesOf = await startGames({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf, say: channelsOf.say });
 const sharesOf = startShares({ io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
 channelsOf.onChange(() => { programOf.announce(); gamesOf.announce(); sharesOf.announce(); }); // a newly identified page gets the program and games too
 

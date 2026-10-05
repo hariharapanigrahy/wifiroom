@@ -421,6 +421,7 @@ function GameView({ g }) {
   return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${g.canEnd && html`<button class="ghost sm" onClick=${() => confirm('End this game for everyone in it?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
     ${!g.joined && (!g.seats || g.players.length < g.seats) && html`<p><button onClick=${() => act('game-join', { id: g.id })}>${g.seats ? 'Take a seat' : 'Join this game'}</button></p>`}
     ${(g.joined || g.runs || g.seats) && bodyEl}
+    ${g.joined && g.state?.result && !g.next && html`<p><button onClick=${async () => { const r = await act('game-rematch', { id: g.id }); if (r.ok) { games.open = r.id; draw(); } }}>🔁 Rematch</button></p>`}
     <p class="note">Playing: ${g.players.map((p) => p.name).join(', ') || 'nobody yet'}</p>
   <//>`;
 }
@@ -485,7 +486,7 @@ async function pickFolderHandle() {
   startShare(dir.name, entries);
 }
 // The phone app's folder picker hands back a listing; its files are read through the app in chunks.
-window.wifiroom = { startShare, stopShare, getFile }; // for tests and the app
+window.wifiroom = { startShare, stopShare, getFile, games }; // for tests and the app
 window.onFolderPicked = (json) => {
   const { name, files } = JSON.parse(json);
   const app = window.WiFiRoomFolder;
@@ -576,7 +577,14 @@ window.addEventListener('pane', draw);
 socket.on('program', (p) => { prog.data = p; draw(); });
 // Ten minutes before something on the schedule, and when it starts: a toast, a buzz, and a notification when the page is hidden.
 socket.on('program-alert', ({ text }) => { toast(text); navigator.vibrate?.([200, 100, 200]); if (document.hidden) notify(text); });
-socket.on('games', (g) => { games.data = g; draw(); });
+socket.on('games', (g) => {
+  games.data = g;
+  // A rematch you're in moves you to the new game.
+  const cur = g.games.find((x) => x.id === games.open);
+  if (cur?.next && cur.joined && cur.next !== games.open) { games.open = cur.next; toast('🔁 Rematch!'); }
+  draw();
+});
+socket.on('game-notice', ({ text }) => { if (document.body.dataset.pane !== 'games') toast(text); });
 socket.on('shares', (d) => { shr.data = d; draw(); });
 socket.on('channels', () => { if (window.ch?.me && !window.ch.msgs.announcements) socket.emit('channel-history', { id: 'announcements' }, (r) => { if (r.ok) { window.ch.msgs.announcements = r.messages; draw(); } }); draw(); });
 socket.on('channel-msg', ({ channel }) => channel === 'announcements' && draw());
