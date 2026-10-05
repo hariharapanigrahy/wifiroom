@@ -113,6 +113,26 @@
       #chats-back { display: inline-block; }
     }
 
+    /* ---- Program pane ---- */
+    .program { max-width: 760px; }
+    .card2 { background: var(--panel2); border: 1px solid var(--hair); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+    .card2-head { display: flex; align-items: center; gap: 8px; } .card2-head h3 { flex: 1; margin: 0 0 6px; }
+    .nownext { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .nownext > div { border-radius: 8px; padding: 10px 12px; border: 1px solid var(--hair); }
+    .nownext .now { background: #1f3a2a; border-color: var(--trust); } .nownext .next { background: var(--panel2); }
+    .nownext .tag { font-size: 10px; letter-spacing: 2px; color: var(--muted); margin-bottom: 2px; } .nownext .now .tag { color: var(--trust); }
+    .dayhead { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin: 10px 0 4px; }
+    .item { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--hair); }
+    .item .when { flex: 0 0 56px; color: var(--accent); } .item .what { flex: 1; min-width: 0; } .item.past { opacity: .5; }
+    .form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; } .form label { flex: 0 0 auto; }
+    .form textarea { resize: vertical; }
+    button.sm { padding: 3px 7px; font-size: 12px; }
+    .poll { padding: 10px 0; border-top: 1px solid var(--hair); } .poll.closed { opacity: .7; }
+    .poll .opt { position: relative; display: flex; width: 100%; text-align: left; background: #140f17; color: var(--ink); border: 1px solid var(--hair); margin: 4px 0; padding: 7px 10px; overflow: hidden; }
+    .poll .opt .bar { position: absolute; left: 0; top: 0; bottom: 0; background: #f2b84b33; transition: width .3s; }
+    .poll .opt.mine { border-color: var(--accent); } .poll .opt .txt { position: relative; flex: 1; } .poll .opt .n { position: relative; color: var(--muted); }
+    .poll .opt:disabled { cursor: default; opacity: 1; }
+
     /* ---- overlays ---- */
     #call-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 35; display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 12px; background: #1f3a2a; border-bottom: 2px solid var(--trust); }
     #call-bar span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }

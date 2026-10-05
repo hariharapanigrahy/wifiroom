@@ -1,0 +1,112 @@
+// The program: what's happening at this gathering, kept on the device hosting the room (program.json).
+// A title ("Game night", "Beach resort · Oct 5"), a schedule with Now/Next, polls, and sign-up sheets.
+// Announcements are a channel only the host can post in (#announcements, see channels.js).
+// The host (the organizer, whoever runs the room) edits; everyone sees, votes and signs up.
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { JSONFilePreset } from 'lowdb/node';
+
+const MAX_ITEMS = 200;
+const id = () => randomBytes(5).toString('hex');
+const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+const when = (t) => (Number.isFinite(t) && t > 0 ? Math.round(t) : null);
+
+export async function startProgram({ dataDir, io, isHost, nameOf }) {
+  const db = await JSONFilePreset(path.join(dataDir, 'program.json'), { title: '', schedule: [], polls: [], signups: [] });
+  const P = db.data;
+  let dirty = null;
+  const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
+
+  // What everyone sees. Votes stay on the host: each person gets the counts plus their own choice.
+  const snapshot = (uid) => ({
+    title: P.title,
+    schedule: [...P.schedule].sort((a, b) => a.start - b.start),
+    polls: P.polls.map((p) => ({ id: p.id, question: p.question, open: p.open, ts: p.ts, by: nameOf(p.by), total: p.options.reduce((n, o) => n + o.votes.length, 0),
+      options: p.options.map((o) => ({ text: o.text, votes: o.votes.length, mine: o.votes.includes(uid) })) })),
+    signups: P.signups.map((s) => ({ id: s.id, title: s.title, max: s.max, people: s.people.map(nameOf), mine: s.people.includes(uid), by: nameOf(s.by) })),
+  });
+  const announce = () => { for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('program', snapshot(s.data.uid)); };
+
+  function attach(socket) {
+    const uid = () => socket.data.uid;
+    const host = () => !!uid() && isHost(uid());
+    const deny = (ack) => ack?.({ ok: false, error: 'Only the host can change the program' });
+    socket.on('program-get', (...args) => { const ack = args.find((a) => typeof a === 'function'); if (uid()) ack?.(snapshot(uid())); });
+
+    socket.on('program-title', ({ title } = {}, ack) => {
+      if (!host()) return deny(ack);
+      P.title = clean(title, 80);
+      save(); ack?.({ ok: true }); announce();
+    });
+
+    // Schedule items: { id?, title, start, end?, where?, notes? }; with an id, it's an edit.
+    socket.on('schedule-save', (item = {}, ack) => {
+      if (!host()) return deny(ack);
+      const title = clean(item.title, 80), start = when(item.start);
+      if (!title || !start) return ack?.({ ok: false, error: 'A title and a start time are needed' });
+      const it = { id: typeof item.id === 'string' && P.schedule.find((x) => x.id === item.id) ? item.id : id(), title, start, end: when(item.end), where: clean(item.where, 60), notes: clean(item.notes, 300) };
+      const i = P.schedule.findIndex((x) => x.id === it.id);
+      i >= 0 ? (P.schedule[i] = it) : P.schedule.push(it);
+      if (P.schedule.length > MAX_ITEMS) P.schedule.shift();
+      save(); ack?.({ ok: true, id: it.id }); announce();
+    });
+    socket.on('schedule-delete', ({ id: sid } = {}, ack) => {
+      if (!host()) return deny(ack);
+      P.schedule = P.schedule.filter((x) => x.id !== sid);
+      save(); ack?.({ ok: true }); announce();
+    });
+
+    socket.on('poll-create', ({ question, options } = {}, ack) => {
+      if (!host()) return deny(ack);
+      const q = clean(question, 140);
+      const opts = (Array.isArray(options) ? options : []).map((o) => clean(o, 60)).filter(Boolean).slice(0, 8);
+      if (!q || opts.length < 2) return ack?.({ ok: false, error: 'A question and at least two options' });
+      P.polls.unshift({ id: id(), question: q, options: opts.map((text) => ({ text, votes: [] })), open: true, ts: Date.now(), by: uid() });
+      P.polls = P.polls.slice(0, 50);
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('poll-vote', ({ id: pid, option } = {}, ack) => {
+      const me = uid(), p = P.polls.find((x) => x.id === pid);
+      if (!me || !p || !p.open || !p.options[option]) return ack?.({ ok: false, error: 'This poll is closed' });
+      for (const o of p.options) o.votes = o.votes.filter((v) => v !== me);
+      p.options[option].votes.push(me);
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('poll-close', ({ id: pid, open } = {}, ack) => {
+      if (!host()) return deny(ack);
+      const p = P.polls.find((x) => x.id === pid);
+      if (p) p.open = !!open;
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('poll-delete', ({ id: pid } = {}, ack) => {
+      if (!host()) return deny(ack);
+      P.polls = P.polls.filter((x) => x.id !== pid);
+      save(); ack?.({ ok: true }); announce();
+    });
+
+    // Sign-up sheets: "Karaoke slot 9pm (max 6)".
+    socket.on('signup-create', ({ title, max } = {}, ack) => {
+      if (!host()) return deny(ack);
+      const t = clean(title, 80);
+      if (!t) return ack?.({ ok: false, error: 'Give it a title' });
+      P.signups.unshift({ id: id(), title: t, max: Number.isInteger(max) && max > 0 ? Math.min(max, 500) : null, people: [], by: uid() });
+      P.signups = P.signups.slice(0, 50);
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('signup-toggle', ({ id: sid } = {}, ack) => {
+      const me = uid(), s = P.signups.find((x) => x.id === sid);
+      if (!me || !s) return ack?.({ ok: false, error: 'No such sheet' });
+      if (s.people.includes(me)) s.people = s.people.filter((p) => p !== me);
+      else if (s.max && s.people.length >= s.max) return ack?.({ ok: false, error: 'Full' });
+      else s.people.push(me);
+      save(); ack?.({ ok: true }); announce();
+    });
+    socket.on('signup-delete', ({ id: sid } = {}, ack) => {
+      if (!host()) return deny(ack);
+      P.signups = P.signups.filter((x) => x.id !== sid);
+      save(); ack?.({ ok: true }); announce();
+    });
+  }
+
+  return { attach, announce };
+}

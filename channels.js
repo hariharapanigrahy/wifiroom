@@ -26,20 +26,27 @@ export async function startChannels({ dataDir, io }) {
     channels.general = { id: 'general', name: 'general', kind: 'public', topic: 'Everyone on this Wi-Fi', members: [], created: Date.now(), by: null };
     messages.general = [];
   }
+  if (!channels.announcements) {
+    channels.announcements = { id: 'announcements', name: 'announcements', kind: 'public', topic: 'From the host', members: [], created: Date.now(), by: null, hostOnly: true };
+    messages.announcements = [];
+  }
   let dirty = null;
   const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
 
   const canSee = (ch, uid) => ch.kind === 'public' || ch.members.includes(uid);
-  const isMember = (ch, uid) => ch.id === 'general' || ch.members.includes(uid);
-  const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: ch.id === 'general' ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false });
+  const EVERYONE = ['general', 'announcements']; // joined automatically
+  const isMember = (ch, uid) => EVERYONE.includes(ch.id) || ch.members.includes(uid);
+  const view = (ch, uid) => ({ id: ch.id, name: ch.name, kind: ch.kind, topic: ch.topic, members: EVERYONE.includes(ch.id) ? Object.keys(users) : ch.members, joined: isMember(ch, uid), by: ch.by, last: messages[ch.id]?.at(-1)?.ts ?? ch.created, host: ch.hostOnly ?? false });
   const listFor = (uid) => Object.values(channels).filter((ch) => canSee(ch, uid)).map((ch) => view(ch, uid));
   const room = (cid) => `ch:${cid}`;
-  const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id) }]));
+  const peopleView = () => Object.fromEntries(Object.entries(users).map(([id, u]) => [id, { name: u.name, seen: u.seen, online: online.has(id), host: !!u.host }]));
   const online = new Map(); // uid -> count of open pages
 
   // Everyone's channel list and the people list, after anything that changes them.
+  const listeners = [];
   const announce = () => {
     for (const s of io.sockets.sockets.values()) if (s.data.uid) s.emit('channels', { list: listFor(s.data.uid), people: peopleView() });
+    for (const f of listeners) f();
   };
 
   function attach(socket, { isHost }) {
@@ -106,7 +113,7 @@ export async function startChannels({ dataDir, io }) {
 
     socket.on('channel-leave', ({ id } = {}, ack) => {
       const uid = me(), ch = chan(id);
-      if (!uid || !ch || ch.id === 'general') return ack?.({ ok: false, error: "Can't leave this one" });
+      if (!uid || !ch || EVERYONE.includes(ch.id)) return ack?.({ ok: false, error: "Can't leave this one" });
       ch.members = ch.members.filter((m) => m !== uid);
       socket.leave(room(id));
       post(ch, { system: true, text: `${users[uid].name} left.` });
@@ -169,5 +176,10 @@ export async function startChannels({ dataDir, io }) {
     return msg;
   }
 
-  return { attach };
+  return {
+    attach,
+    isHost: (uid) => !!users[uid]?.host,
+    nameOf: (uid) => users[uid]?.name ?? 'Someone',
+    onChange: (f) => listeners.push(f), // runs after anyone identifies, joins or leaves
+  };
 }

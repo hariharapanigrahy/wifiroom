@@ -18,6 +18,7 @@ import { JSONFilePreset } from 'lowdb/node';
 import { startDrivers, capabilitiesOf, castName, runAction, screenTarget } from './drivers.js';
 import { startHome, homeList, homeStatus, homeAction, getHomeSettings, saveHomeSettings, HOME_ACTIONS } from './home.js';
 import { startChannels } from './channels.js';
+import { startProgram } from './program.js';
 
 // Set by bin/wifiroom.js. Sharing is opt-in: without --share only this laptop can open the room.
 const PORT = Number(process.env.WIFIROOM_PORT) || 4321;
@@ -70,6 +71,8 @@ app.get('/lib/nacl-fast.min.js', (req, res) => res.sendFile(path.join(NACL_DIR, 
 const server = http.createServer(app);
 const io = new Server(server);
 const channelsOf = await startChannels({ dataDir: DATA_DIR, io });
+const programOf = await startProgram({ dataDir: DATA_DIR, io, isHost: channelsOf.isHost, nameOf: channelsOf.nameOf });
+channelsOf.onChange(programOf.announce); // a newly identified page gets the program too
 
 // ---- discovery ----
 const bonjour = new Bonjour();
@@ -329,6 +332,7 @@ io.on('connection', async (socket) => {
   const host = socket.data.host;
   if (host) socket.join('host');
   channelsOf.attach(socket, { isHost: host });
+  programOf.attach(socket);
   const joinUrl = joinUrlOf();
   socket.emit('hello', {
     host, build: BUILD, platform: process.platform, reactions: REACTIONS, lanShared: HOST !== '127.0.0.1',
