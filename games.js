@@ -4,6 +4,7 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { JSONFilePreset } from 'lowdb/node';
+import { Chess } from 'chess.js';
 
 const id = () => randomBytes(5).toString('hex');
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -75,7 +76,47 @@ const likely = {
   },
 };
 
-const TYPES = { quiz, likely };
+// ---- Chess: two seats (first to join is white), rules by chess.js. The state is the move list; the
+// position is replayed from it, so threefold repetition and the like come for free.
+const chess = {
+  name: 'Chess', icon: '♟️', min: 2, max: 2,
+  create: () => ({ moves: [], result: null, drawOffer: null, resigned: null }),
+  game(s) { const c = new Chess(); for (const m of s.moves) c.move(m); return c; },
+  step(g, s, uid, action, data) {
+    if (s.result) return;
+    const seat = g.players.indexOf(uid);
+    if (seat < 0 || seat > 1) return;
+    const c = chess.game(s);
+    const color = seat === 0 ? 'w' : 'b';
+    if (action === 'move' && c.turn() === color) {
+      const m = (() => { try { return c.move({ from: String(data?.from), to: String(data?.to), promotion: data?.promotion || 'q' }); } catch { return null; } })();
+      if (!m) return;
+      s.moves.push(m.san);
+      s.drawOffer = null;
+      if (c.isCheckmate()) s.result = { winner: uid, how: 'checkmate' };
+      else if (c.isDraw()) s.result = { winner: null, how: c.isStalemate() ? 'stalemate' : c.isThreefoldRepetition() ? 'repetition' : c.isInsufficientMaterial() ? 'insufficient material' : '50-move rule' };
+      if (s.result?.winner) g.award(s.result.winner, 3);
+      return;
+    }
+    if (action === 'resign') { s.result = { winner: g.players[1 - seat], how: 'resignation' }; g.award(s.result.winner, 3); return; }
+    if (action === 'draw') {
+      if (s.drawOffer && s.drawOffer !== uid) s.result = { winner: null, how: 'agreement' };
+      else s.drawOffer = uid;
+    }
+  },
+  // Each player sees the position, whose move it is, and (on their turn) their legal moves.
+  view(s, uid, g) {
+    const c = chess.game(s);
+    const seat = g.players.indexOf(uid);
+    const turn = c.turn();
+    const mine = (seat === 0 && turn === 'w') || (seat === 1 && turn === 'b');
+    const last = c.history({ verbose: true }).at(-1);
+    return { fen: c.fen(), turn, seat, check: c.inCheck(), moves: s.moves, last: last ? { from: last.from, to: last.to } : null, result: s.result, drawOffer: s.drawOffer,
+      legal: mine && !s.result ? c.moves({ verbose: true }).map((m) => ({ from: m.from, to: m.to, promotion: m.promotion })) : [] };
+  },
+};
+
+const TYPES = { chess, quiz, likely };
 
 export async function startGames({ dataDir, io, isHost, nameOf }) {
   const db = await JSONFilePreset(path.join(dataDir, 'games.json'), { scores: {}, games: [] });
@@ -84,9 +125,10 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
   const save = () => { dirty ??= setTimeout(() => { dirty = null; db.write().catch(() => {}); }, 500); };
 
   const view = (g, uid) => ({ id: g.id, type: g.type, name: TYPES[g.type].name, icon: TYPES[g.type].icon, title: g.title, by: nameOf(g.by), created: g.created, ended: g.ended,
-    players: g.players.map((p) => ({ id: p, name: nameOf(p) })), joined: g.players.includes(uid), state: g.state });
+    players: g.players.map((p) => ({ id: p, name: nameOf(p) })), joined: g.players.includes(uid), seats: TYPES[g.type].max ?? null,
+    state: TYPES[g.type].view ? TYPES[g.type].view(g.state, uid, g) : g.state });
   const snapshot = (uid) => ({
-    types: Object.entries(TYPES).map(([k, t]) => ({ type: k, name: t.name, icon: t.icon })),
+    types: Object.entries(TYPES).map(([k, t]) => ({ type: k, name: t.name, icon: t.icon, players: t.max ? `${t.min}–${t.max}` : 'any' })),
     games: D.games.filter((g) => !g.ended || Date.now() - g.ended < 3600e3).map((g) => view(g, uid)),
     scores: Object.entries(D.scores).map(([who, points]) => ({ id: who, name: nameOf(who), points })).sort((a, b) => b.points - a.points),
   });
@@ -108,13 +150,18 @@ export async function startGames({ dataDir, io, isHost, nameOf }) {
     socket.on('game-join', ({ id: gid } = {}, ack) => {
       const g = find(gid);
       if (!uid() || !g) return ack?.({ ok: false, error: 'That game is over' });
-      if (!g.players.includes(uid())) g.players.push(uid());
+      const max = TYPES[g.type].max;
+      if (!g.players.includes(uid())) {
+        if (max && g.players.length >= max) return ack?.({ ok: false, error: 'All seats are taken' });
+        g.players.push(uid());
+      }
       save(); ack?.({ ok: true }); announce();
     });
     socket.on('game-action', ({ id: gid, action, data } = {}, ack) => {
       const g = find(gid), me = uid();
       if (!me || !g) return ack?.({ ok: false, error: 'That game is over' });
       if (!g.players.includes(me) && !host()) return ack?.({ ok: false, error: 'Join the game first' });
+      if (TYPES[g.type].min && g.players.length < TYPES[g.type].min) return ack?.({ ok: false, error: `Needs ${TYPES[g.type].min} players` });
       const api = { players: g.players, award: (who, n) => { D.scores[who] = (D.scores[who] ?? 0) + n; } };
       TYPES[g.type].step(api, g.state, me, String(action), data, host());
       save(); ack?.({ ok: true }); announce();

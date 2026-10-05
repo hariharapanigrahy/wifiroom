@@ -184,7 +184,7 @@ function NewGame({ types }) {
       <input placeholder="Title (optional)" maxLength=${60} value=${title} onInput=${(e) => setTitle(e.target.value)} />
       <button onClick=${async () => { const r = await act('game-create', { type, title }); if (r.ok) { setTitle(''); games.open = r.id; draw(); } }}>Start</button>
     </div>
-    <p class="note">🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
+    <p class="note">♟️ Chess: two seats, first to join is white. 🔔 Buzzer quiz: you ask, they buzz or pick an answer, you award points. 🤔 Most likely to…: a prompt, everyone votes for someone, then the reveal.</p>
   <//>`;
 }
 
@@ -233,11 +233,41 @@ function Likely({ g }) {
   </div>`;
 }
 
+// ---- Chess board: tap a piece, then a square; legal targets come from the host ----
+const PIECES = { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙', k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+function ChessBoard({ g }) {
+  const s = g.state, mine = me();
+  const [sel, setSel] = useState(null);
+  const rows = s.fen.split(' ')[0].split('/').map((row) => [...row].flatMap((ch) => (/\d/.test(ch) ? Array(Number(ch)).fill('') : [ch])));
+  const files = 'abcdefgh';
+  const flip = s.seat === 1;
+  const order = flip ? [...Array(8).keys()].reverse() : [...Array(8).keys()];
+  const targets = sel ? s.legal.filter((m) => m.from === sel) : [];
+  const tap = (sq, piece) => {
+    const move = targets.find((m) => m.to === sq);
+    if (move) { gact(g.id, 'move', { from: move.from, to: move.to, promotion: move.promotion }); setSel(null); return; }
+    if (s.legal.some((m) => m.from === sq)) setSel(sq); else setSel(null);
+  };
+  const names = g.players.map((p) => p.name);
+  const status = s.result ? (s.result.winner ? `${g.players.find((p) => p.id === s.result.winner)?.name} wins by ${s.result.how}` : `Draw by ${s.result.how}`)
+    : g.players.length < 2 ? 'Waiting for a second player…' : `${s.turn === 'w' ? names[0] : names[1]} to move${s.check ? ' · check!' : ''}${s.legal.length ? ' (you)' : ''}`;
+  return html`<div class="chess">
+    <div class="row" style="justify-content:space-between"><span>♙ ${names[0] ?? '—'}</span><span>♟ ${names[1] ?? '—'}</span></div>
+    <div class="board ${flip ? 'flip' : ''}">
+      ${order.map((r) => order.map((c) => { const sq = files[c] + (8 - r); const piece = rows[r][c]; const light = (r + c) % 2 === 0; const isT = targets.some((m) => m.to === sq); const isLast = s.last && (s.last.from === sq || s.last.to === sq);
+        return html`<div key=${sq} class="sq ${light ? 'light' : 'dark'} ${sel === sq ? 'sel' : ''} ${isT ? 'target' : ''} ${isLast ? 'last' : ''}" onClick=${() => tap(sq, piece)}>${PIECES[piece] ?? ''}</div>`; }))}
+    </div>
+    <p class="row"><span class="note" style="flex:1">${status}</span>
+      ${s.seat >= 0 && !s.result && g.players.length === 2 && html`<button class="ghost sm" onClick=${() => gact(g.id, 'draw')}>${s.drawOffer && s.drawOffer !== mine ? 'Accept draw' : s.drawOffer === mine ? 'Draw offered' : 'Offer draw'}</button><button class="ghost sm" onClick=${() => confirm('Resign?') && gact(g.id, 'resign')}>Resign</button>`}</p>
+    ${s.moves.length > 0 && html`<p class="note" style="word-break:break-word">${s.moves.map((m, i) => (i % 2 === 0 ? `${i / 2 + 1}. ` : '') + m).join(' ')}</p>`}
+  </div>`;
+}
+
 function GameView({ g }) {
-  const body = g.type === 'quiz' ? html`<${Quiz} g=${g} />` : html`<${Likely} g=${g} />`;
+  const body = g.type === 'quiz' ? html`<${Quiz} g=${g} />` : g.type === 'chess' ? html`<${ChessBoard} g=${g} />` : html`<${Likely} g=${g} />`;
   return html`<${Card} title=${`${g.icon} ${g.title}`} right=${html`<div class="row"><span class="note">${g.players.length} playing</span>${amHost() && html`<button class="ghost sm" onClick=${() => confirm('End this game?') && act('game-end', { id: g.id })}>End</button>`}<button class="ghost sm" onClick=${() => { games.open = null; draw(); }}>‹ All games</button></div>`}>
-    ${!g.joined && !amHost() && html`<p><button onClick=${() => act('game-join', { id: g.id })}>Join this game</button></p>`}
-    ${(g.joined || amHost()) && body}
+    ${!g.joined && (!g.seats || g.players.length < g.seats) && html`<p><button onClick=${() => act('game-join', { id: g.id })}>${g.seats ? 'Take a seat' : 'Join this game'}</button></p>`}
+    ${(g.joined || amHost() || g.seats) && body}
     <p class="note">Playing: ${g.players.map((p) => p.name).join(', ') || 'nobody yet'}</p>
   <//>`;
 }
@@ -253,8 +283,8 @@ function Games() {
     ${amHost() && html`<${NewGame} types=${d.types} />`}
     <${Card} title="Games on now">
       ${!live.length && html`<p class="note">${amHost() ? 'Start one above.' : 'Nothing yet. The host starts games.'}</p>`}
-      ${live.map((g) => html`<div class="item" key=${g.id}><div class="when">${g.icon}</div><div class="what"><b>${g.title}</b><div class="note">${g.name} · ${g.players.length} playing${g.joined ? ' · you\'re in' : ''}</div></div>
-        <button onClick=${async () => { if (!g.joined && !amHost()) await act('game-join', { id: g.id }); games.open = g.id; draw(); }}>${g.joined || amHost() ? 'Open' : 'Join'}</button></div>`)}
+      ${live.map((g) => html`<div class="item" key=${g.id}><div class="when">${g.icon}</div><div class="what"><b>${g.title}</b><div class="note">${g.name} · ${g.players.length}${g.seats ? ` of ${g.seats} seats` : ' playing'}${g.joined ? ' · you\'re in' : ''}</div></div>
+        <button onClick=${() => { games.open = g.id; draw(); }}>${g.joined ? 'Open' : g.seats && g.players.length >= g.seats ? 'Watch' : 'Open'}</button></div>`)}
     <//>
     <${Scoreboard} scores=${d.scores} />
   </div>`;
