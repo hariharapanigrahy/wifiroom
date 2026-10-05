@@ -2,3 +2,8 @@ node_modules/
 data/
 *.tgz
 .DS_Store
+
+# agent skills and launch-video output stay local
+.agents/
+.claude/skills/
+brag-output/
