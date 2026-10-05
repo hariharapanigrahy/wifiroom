@@ -8,6 +8,7 @@ npx wifiroom --share
 
 Everyone else on the Wi-Fi opens the address it prints (or scans the QR), picks a name, and they're in. Nothing leaves the network.
 
+<p align="center"><img src="docs/screenshots/demo.gif" width="760" alt="WiFiRoom on a laptop: the room, channels, a chess game, Files"></p>
 <p align="center">
   <img src="docs/screenshots/phone-room.png" width="180" alt="The room on a phone">
   <img src="docs/screenshots/phone-chess.png" width="180" alt="Chess on a phone">
