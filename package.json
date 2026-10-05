@@ -10,7 +10,6 @@
     "bin",
     "public",
     "server.js",
-    "ble.js",
     "drivers.js",
     "home.js",
     "screen.js",
@@ -29,8 +28,6 @@
     "lan",
     "devices",
     "who-is-on-my-wifi",
-    "bluetooth",
-    "radar",
     "pixel-art",
     "phaser",
     "local",
@@ -63,9 +60,6 @@
     "ws": "^8.22.0",
     "youtube-remote": "^1.1.0",
     "zod": "^4.6.5"
-  },
-  "optionalDependencies": {
-    "@stoprocent/noble": "^2.8.0"
   },
   "repository": {
     "type": "git",

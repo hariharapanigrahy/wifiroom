@@ -16,8 +16,6 @@
     button, .btn { font: inherit; background: var(--accent); color: #1b1420; border: 0; padding: 7px 12px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
     button:disabled { opacity: .5; cursor: wait; }
     .ghost { background: transparent; color: var(--ink); border: 1px solid var(--muted); }
-    .tab { background: transparent; color: var(--ink); border: 1px solid var(--muted); }
-    .tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
     .host-only { display: none; } body.host .host-only { display: revert; }
     #stage { position: relative; }
     #room canvas { display: block; image-rendering: pixelated; border-radius: 6px; }
@@ -93,8 +91,6 @@
     <header>
       <h1>WiFiRoom <span id="count"></span></h1>
       <div class="bar">
-        <button class="tab on" data-view="room">🏠 Room</button>
-        <button class="tab" data-view="radar">📡 Radar</button>
         <button class="ghost in-room-only" id="open-chats">💬 Chats<span class="badge" id="chats-badge"></span></button>
         <button class="ghost host-only" id="open-home">🏡 Home</button>
         <button class="ghost host-only" id="open-timeline">🕒 Timeline</button>

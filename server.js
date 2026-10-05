@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
-import { fork } from 'node:child_process';
 import { randomInt, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +42,8 @@ const REACTIONS = ['👋', '❤️', '😂', '🔥', '👀', '🎉'];
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = await JSONFilePreset(path.join(DATA_DIR, 'db.json'), { labels: {}, events: [] });
 db.data.events ??= [];
+delete db.data.bleAngles; // left over from the Bluetooth radar, which is gone
+for (const l of Object.values(db.data.labels)) delete l.bleId;
 // Devices are keyed by an opaque hash so visitors never learn MAC addresses.
 const idOf = (mac) => createHash('sha256').update(mac).digest('hex').slice(0, 12);
 for (const key of Object.keys(db.data.labels)) if (key.includes(':')) { db.data.labels[idOf(key)] = db.data.labels[key]; delete db.data.labels[key]; }
@@ -51,7 +52,6 @@ const devices = new Map();      // id -> device
 // leave the browsers, so this server can only pass encrypted messages along; it can't read them.
 const chatKeys = new Map();
 const bonjourNames = new Map(); // ipv4 -> advertised name
-let ble = { status: 'starting', list: [] };
 let initialized = false;
 
 const app = express();
@@ -123,7 +123,7 @@ function logEvent(type, d) {
   db.write();
 }
 
-// The host sees everything; visitors get only what the room needs to draw (no IPs, MACs, Bluetooth).
+// The host sees everything; visitors get only what the room needs to draw (no IPs or MACs).
 function snapshot(forHost) {
   return [...devices.values()].map((d) => {
     const full = { ...d, ...label(d.id), zone: zoneOf(d), visitors: visitorsOf(d.id), chatKey: chatRoomOf(d) ? chatKeys.get(d.id) : undefined, sharing: screenTarget() === d.ip, caps: [...capabilitiesOf(d.ip, d), ...(visitorsOf(d.id) ? ['ring'] : [])] };
@@ -185,23 +185,6 @@ async function refresh() {
   broadcast();
   for (const [id, d] of devices) if (d.status === 'gone') devices.delete(id);
   initialized = true;
-}
-
-// ---- Bluetooth worker (optional) ----
-function startBle() {
-  // fork() would start a second copy of the Android app, and noble has no Android backend.
-  if (ANDROID) { ble = { status: 'unavailable', list: [] }; return; }
-  const child = fork(new URL('./ble.js', import.meta.url), { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
-  child.on('message', (m) => {
-    if (m.type === 'state') ble.status = m.state;
-    if (m.type === 'devices') ble.list = m.list;
-    io.to('host').emit('ble', ble);
-  });
-  child.on('exit', (code, signal) => {
-    // macOS kills processes that use Bluetooth without permission (SIGABRT / 134).
-    ble = { status: signal === 'SIGABRT' || code === 134 ? 'needs-permission' : 'unavailable', list: [] };
-    io.to('host').emit('ble', ble);
-  });
 }
 
 // ---- shared device commands (used by the room's sockets and the local HTTP API) ----
@@ -342,8 +325,6 @@ io.on('connection', async (socket) => {
   });
   socket.emit('devices', snapshot(host));
   if (host) {
-    socket.emit('ble', ble);
-    socket.emit('ble-angles', db.data.bleAngles ?? {});
     socket.emit('home', homeSnapshot());
   }
 
@@ -442,13 +423,12 @@ io.on('connection', async (socket) => {
   });
 
   // ---- host-only controls ----
-  socket.on('label', async ({ id, nickname, zone, bleId } = {}) => {
+  socket.on('label', async ({ id, nickname, zone } = {}) => {
     if (!host || !devices.has(id)) return;
     const l = label(id), d = devices.get(id);
     const before = zoneOf(d);
     if (nickname !== undefined) l.nickname = String(nickname).trim().slice(0, 40);
     if (zone === 'trusted' || zone === 'unknown') l.zone = zone;
-    if (bleId !== undefined) l.bleId = bleId || null;
     if (zoneOf(d) !== before) d.pos = randPos(zoneOf(d));
     await db.write();
     broadcast();
@@ -461,13 +441,6 @@ io.on('connection', async (socket) => {
     d.pos = clampTo(zoneOf(d), { x, y });
     await db.write();
     broadcast();
-  });
-
-  socket.on('ble-angle', async ({ bleId, angle } = {}) => {
-    if (!host || typeof bleId !== 'string') return;
-    (db.data.bleAngles ??= {})[bleId] = Number(angle) || 0;
-    await db.write();
-    io.to('host').emit('ble-angles', db.data.bleAngles);
   });
 
   socket.on('timeline', (ack) => host && ack?.(db.data.events.slice(-100).reverse()));
@@ -602,4 +575,3 @@ setInterval(() => {
 refresh();
 setInterval(refresh, POLL_MS);
 if (!PASSIVE) { sweep(); setInterval(sweep, SWEEP_EVERY_MS); }
-startBle();

@@ -17,7 +17,6 @@ WiFiRoom runs locally on your computer, and nothing leaves your network. It neve
 - **🕒 See who's home.** Nickname the phones in your house, and the timeline shows who arrived and left, and when.
 - **👉 Poke a device** to check it's alive. It sends a real ping, and the character hops with the reply time.
 - **📲 Hang out on the same Wi-Fi.** Start with `--share` and friends scan a QR code to join from any phone (Android, iPhone, laptop). No app, account or internet needed. Chat, send emoji, and drop YouTube or Instagram links straight onto someone's screen.
-- **📡 Bluetooth radar** *(experimental)*. See Bluetooth devices around you at their rough distance.
 - **📺 Share your screen to the TV.** One click on a Google Cast or DLNA TV (AirPlay on macOS is experimental).
 - **🏡 Run your home.** Turn lights and plugs on and off, dim them, change colors, set the AC, look at cameras. Works with Kasa, Hue, Shelly, LIFX, ONVIF cameras, and anything in Home Assistant.
 
@@ -33,8 +32,6 @@ npx wifiroom --help
 Requires [Node.js](https://nodejs.org) 20 or newer.
 
 **Sharing is off by default.** Without `--share`, only your computer can open the room. With it, anyone on your Wi-Fi can join by opening your computer's IP address (e.g. `http://192.168.1.3`), no code needed. iPhones and laptops can also use `http://wifiroom.local`; most Android phones don't understand `.local` names. They can chat, send links and ring phones in the room, but device controls, IP and hardware addresses and the API stay on your computer. Add `--code` to also require a 6-digit code (new every start), and only use `--share` on networks you trust.
-
-**Bluetooth on macOS:** run it from Terminal (or iTerm) and click **Allow** when macOS asks. Without permission, everything else still works.
 
 ## Control your devices
 
@@ -154,7 +151,7 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 | Network scanning | **None.** WiFiRoom reads your computer's existing ARP table and listens for Bonjour/mDNS announcements. To find smart-home devices it also sends the standard "who's there?" broadcasts those devices are built to answer (SSDP, Kasa, LIFX, ONVIF WS-Discovery) |
 | Data leaving your network | **None** from WiFiRoom itself: no analytics, accounts or cloud. Playing a YouTube link asks your TV to load it from YouTube |
 | Where your labels live | `~/.wifiroom/db.json` on your computer |
-| What visitors see (with `--share`) | Names and characters only. Never IP addresses, MAC addresses, the timeline or Bluetooth data |
+| What visitors see (with `--share`) | Names and characters only. Never IP addresses, MAC addresses, or the timeline |
 | Poke | Sends one ping to the device you clicked |
 | Device control | Only when you (or your AI or scripts) ask, and only to the device you picked |
 | Local API | Answers only this computer, never other devices on your Wi-Fi or web pages in your browser |
@@ -165,7 +162,6 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 
 - **Phones show up as "Mystery phone?".** Modern phones and laptops use a private (random) Wi-Fi address, so their maker is hidden. Nickname them, or ask them to join with `--share`.
 - **Departures are slow.** Your computer remembers devices for up to ~20 minutes, so "left" lags behind reality.
-- **Bluetooth gives distance, not direction.** Distance is estimated from signal strength (±50%), and Bluetooth can't sense direction. Drag a blip to where the device really is.
 - **Messages only reach people who joined.** Nothing is pushed to a phone that hasn't opened the room in its browser.
 - **Screen sharing lags a few seconds and has no sound.** HLS and MPEG-TS are streaming formats, not live mirroring. Some DLNA TVs refuse live streams. AirPlay mirroring is experimental UI scripting.
 - **Smart-home drivers were written from each project's documentation and haven't all been tried on real hardware yet.** Home Assistant control was tested against a simulated Home Assistant; screen capture and the stream server were tested on macOS without a TV. Reports are very welcome.
@@ -182,7 +178,6 @@ Tools: `list_devices`, `poke_device`, `play_on_device`, `control_media`, `wake_d
 | Screen capture + stream server | ✅ tested (no TV yet) | should work (gdigrab), untested | should work on X11 (x11grab), untested |
 | AirPlay mirroring | experimental, untested on a TV | — | — |
 | Smart-home drivers | written from docs; Home Assistant tested against a simulator | same | same |
-| Bluetooth radar | ✅ (with Terminal permission) | should work, untested | should work, untested |
 
 Bug reports from Windows and Linux are very welcome.
 
@@ -198,7 +193,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 What's different on a phone:
 
 - **No ARP table on Android 10+**, so the phone can't see devices that stay quiet. It finds devices that answer a ping instead and pings them again to see who's still here. Makers are never shown (no hardware addresses), and many phones don't answer pings, so they appear once they open the room.
-- **No Bluetooth radar, screen sharing (no ffmpeg) or AirPlay mirroring.** Casting, smart-home control and Bonjour names still work.
+- **No screen sharing (no ffmpeg) or AirPlay mirroring.** Casting, smart-home control and Bonjour names still work.
 - **The short address works** (`http://<phone IP>` redirects into the room), but most Android phones can't open `.local` names.
 - **64-bit ARM only** (nearly every phone since 2017), which keeps the APK around 65 MB.
 
@@ -217,7 +212,6 @@ WiFiRoom is glue between open-source packages. Every direct dependency is MIT li
 | Cast / DLNA / Wake-on-LAN | [castv2-client](https://github.com/thibauts/node-castv2-client), [node-ssdp](https://github.com/diversario/node-ssdp), [upnp-mediarenderer-client](https://github.com/thibauts/node-upnp-mediarenderer-client), [wake_on_lan](https://github.com/agnat/node_wake_on_lan) |
 | YouTube on Cast | [youtube-remote](https://github.com/alxhotel/youtube-remote) |
 | AI tools (MCP) | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk), [socket.io-client](https://github.com/socketio/socket.io), [zod](https://github.com/colinhacks/zod) |
-| Bluetooth (optional) | [@stoprocent/noble](https://github.com/stoprocent/noble) |
 | Invite QR code | [qrcode](https://github.com/soldair/node-qrcode) |
 | Storage | [lowdb](https://github.com/typicode/lowdb) |
 | Open browser | [open](https://github.com/sindresorhus/open) |
@@ -238,13 +232,13 @@ Added for screen sharing and the smart home:
 
 \*Weekly npm downloads, checked October 2026.
 
-Transitive dependencies (the packages these pull in) also include other permissive licenses: ISC, BSD-2, BSD-3, Apache-2.0, BlueOak-1.0.0 and public domain. None are GPL or AGPL. Most come from Express, qrcode, and the optional Bluetooth module's installer. See the full list with:
+Transitive dependencies (the packages these pull in) also include other permissive licenses: ISC, BSD-2, BSD-3, Apache-2.0, BlueOak-1.0.0 and public domain. None are GPL or AGPL. Most come from Express and qrcode. See the full list with:
 
 ```bash
 npx license-checker-rseidelsohn --production --summary
 ```
 
-`npm audit` reports advisories in packages WiFiRoom already used before 0.3.0, none added by the new packages: `braces` (used only by `patch-package` while installing the optional Bluetooth module), `ip` (inside `node-ssdp`), and `protobufjs` (inside `castv2`, used to talk to Cast devices on your own network). None has a non-breaking fix yet.
+`npm audit` reports advisories in packages WiFiRoom already used before 0.3.0, none added by the new packages: `ip` (inside `node-ssdp`), and `protobufjs` (inside `castv2`, used to talk to Cast devices on your own network). None has a non-breaking fix yet.
 
 ## License
 
